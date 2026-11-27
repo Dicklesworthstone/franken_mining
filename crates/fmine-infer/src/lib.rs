@@ -993,4 +993,117 @@ mod tests {
             RefusalCode::OutsidePhysicalDomain109.as_str()
         );
     }
+
+    #[test]
+    fn test_fresh_eyes_hardening_guards_and_refusals() {
+        // 1. Custom LogDensity returning wrong gradient length must refuse (never panic).
+        struct ShortGradModel;
+        impl LogDensity for ShortGradModel {
+            fn dim(&self) -> usize {
+                2
+            }
+            fn param_names(&self) -> Vec<String> {
+                vec!["a".to_string(), "b".to_string()]
+            }
+            fn log_density_and_grad(&self, _z: &[f64]) -> Result<(f64, Vec<f64>), Refusal> {
+                Ok((0.0, vec![0.0])) // length 1 != dim 2
+            }
+        }
+        let cfg = NutsConfig {
+            num_warmup: 4,
+            num_draws: 4,
+            ..NutsConfig::default()
+        };
+        assert_eq!(
+            sample_nuts(&ShortGradModel, &[vec![0.0, 0.0], vec![1.0, 1.0]], &cfg)
+                .unwrap_err()
+                .code,
+            RefusalCode::OutsidePhysicalDomain109.as_str()
+        );
+
+        // 2. Duplicate or blank parameter names refuse in TapeLogDensity and certify_chains.
+        assert_eq!(
+            TapeLogDensity::new(vec!["x".to_string(), "x".to_string()], |_t, v| Ok(v[0]))
+                .err()
+                .expect("dup names")
+                .code,
+            RefusalCode::OutsidePhysicalDomain109.as_str()
+        );
+        assert_eq!(
+            TapeLogDensity::new(vec!["   ".to_string()], |_t, v| Ok(v[0]))
+                .err()
+                .expect("blank name")
+                .code,
+            RefusalCode::OutsidePhysicalDomain109.as_str()
+        );
+
+        // 3. Cross-tape Var misuse refuses instead of panicking.
+        let mut t1 = Tape::default();
+        let _v0 = t1.input(Real(1.0)).expect("v0");
+        let v1 = t1.input(Real(2.0)).expect("v1");
+        let mut t2 = Tape::default();
+        let a = t2.input(Real(3.0)).expect("a");
+        assert_eq!(
+            t2.add(a, v1).unwrap_err().code,
+            RefusalCode::OutsidePhysicalDomain109.as_str()
+        );
+
+        // 4. log_add_exp(+inf, +inf) stays +inf (never NaN).
+        assert_eq!(ad::log_add_exp(f64::INFINITY, f64::INFINITY), f64::INFINITY);
+        assert_eq!(ad::log_add_exp(f64::NEG_INFINITY, 2.5), 2.5);
+
+        // 5. Direct compute_parameter_diagnostics on ragged or non-finite chains never panics.
+        let ragged = compute_parameter_diagnostics(
+            "ragged",
+            &[vec![1.0, 2.0, 3.0, 4.0], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]],
+        );
+        assert!(ragged.split_rhat.is_none());
+        assert_eq!(ragged.bulk_ess, 0.0);
+
+        let nan_diag = compute_parameter_diagnostics("nan", &[vec![f64::NAN; 4], vec![1.0; 4]]);
+        assert!(nan_diag.split_rhat.is_none());
+        assert!(nan_diag.mean.is_finite());
+
+        // 6. Missing post_warmup_energies must fail-closed on E-BFMI when min_ebfmi > 0.
+        let chains = vec![
+            vec![vec![0.1], vec![0.2], vec![-0.1], vec![-0.2]],
+            vec![vec![-0.1], vec![0.15], vec![0.05], vec![-0.15]],
+        ];
+        let stats = vec![
+            ChainRuntimeStats {
+                chain_id: 0,
+                adapted_step_size: 0.5,
+                post_warmup_divergences: 0,
+                max_treedepth_hits: 0,
+                mean_accept_prob: 0.8,
+                post_warmup_energies: Vec::new(),
+            },
+            ChainRuntimeStats {
+                chain_id: 1,
+                adapted_step_size: 0.5,
+                post_warmup_divergences: 0,
+                max_treedepth_hits: 0,
+                mean_accept_prob: 0.8,
+                post_warmup_energies: Vec::new(),
+            },
+        ];
+        let cert = certify_chains(
+            &chains,
+            &["z".to_string()],
+            &stats,
+            &DiagnosticThresholds {
+                min_bulk_ess: 1.0,
+                min_tail_ess: 1.0,
+                max_rhat: 2.0,
+                min_ebfmi: 0.3,
+                ..DiagnosticThresholds::default()
+            },
+        )
+        .expect("cert");
+        assert!(matches!(cert.verdict, DiagnosticVerdict::Refused(_)));
+        assert_eq!(
+            cert.require_certified().unwrap_err().code,
+            RefusalCode::NumericalCertificateFailed207.as_str()
+        );
+    }
 }

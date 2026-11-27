@@ -342,7 +342,7 @@ fn leapfrog_step<M: LogDensity>(
     let Ok((log_p_new, grad_new)) = model.log_density_and_grad(&q_new) else {
         return None;
     };
-    if !log_p_new.is_finite() || grad_new.iter().any(|g| !g.is_finite()) {
+    if grad_new.len() != dim || !log_p_new.is_finite() || grad_new.iter().any(|g| !g.is_finite()) {
         return None;
     }
     let mut p_new = Vec::with_capacity(dim);
@@ -361,16 +361,41 @@ fn leapfrog_step<M: LogDensity>(
     })
 }
 
-/// Betancourt (2017) / Stan generalized no-U-turn check using integrated momentum sum `rho`:
-/// checks `(M^{-1} p_left) · rho > 0` and `(M^{-1} p_right) · rho > 0` (symmetric under time reversal).
-fn no_uturn_rho(rho: &[f64], left: &PhasePoint, right: &PhasePoint, inv_mass: &[f64]) -> bool {
+/// Betancourt (2017) / Stan 2.24+ de-biased generalized no-U-turn criterion using the trapezoidal
+/// momentum integral `rho_mid = rho - 0.5 * (p_left + p_right)` (exact time-reversal symmetry;
+/// eliminates endpoint self-bias that can mask U-turns on curved/hierarchical trajectories).
+fn no_uturn_mid(rho: &[f64], left: &PhasePoint, right: &PhasePoint, inv_mass: &[f64]) -> bool {
     let mut dot_left = 0.0_f64;
     let mut dot_right = 0.0_f64;
     for i in 0..rho.len() {
-        dot_left += rho[i] * (inv_mass[i] * left.p[i]);
-        dot_right += rho[i] * (inv_mass[i] * right.p[i]);
+        let mid = rho[i] - 0.5 * (left.p[i] + right.p[i]);
+        dot_left += mid * (inv_mass[i] * left.p[i]);
+        dot_right += mid * (inv_mass[i] * right.p[i]);
     }
     dot_left > 0.0 && dot_right > 0.0
+}
+
+/// Stan 2.24+ full + cross-boundary sub-span U-turn check when merging `left_span` and `right_span`.
+fn merged_no_uturn(
+    rho_left: &[f64],
+    left_outer: &PhasePoint,
+    left_inner: &PhasePoint,
+    rho_right: &[f64],
+    right_inner: &PhasePoint,
+    right_outer: &PhasePoint,
+    inv_mass: &[f64],
+) -> (Vec<f64>, bool) {
+    let rho_all = add_vecs(rho_left, rho_right);
+    if !no_uturn_mid(&rho_all, left_outer, right_outer, inv_mass) {
+        return (rho_all, false);
+    }
+    let rho_l_cross = add_vecs(rho_left, &right_inner.p);
+    if !no_uturn_mid(&rho_l_cross, left_outer, right_inner, inv_mass) {
+        return (rho_all, false);
+    }
+    let rho_r_cross = add_vecs(&left_inner.p, rho_right);
+    let ok = no_uturn_mid(&rho_r_cross, left_inner, right_outer, inv_mass);
+    (rho_all, ok)
 }
 
 fn add_vecs(a: &[f64], b: &[f64]) -> Vec<f64> {
@@ -535,14 +560,30 @@ fn build_tree<M: LogDensity>(
         first.proposal
     };
 
-    let (left, right, rho_left, rho_right) = if direction < 0.0 {
-        (second.left, first.right, &second.rho, &first.rho)
+    let (left, right, rho, span_ok) = if direction < 0.0 {
+        let (rho, ok) = merged_no_uturn(
+            &second.rho,
+            &second.left,
+            &second.right,
+            &first.rho,
+            &first.left,
+            &first.right,
+            params.inv_mass,
+        );
+        (second.left, first.right, rho, ok)
     } else {
-        (first.left, second.right, &first.rho, &second.rho)
+        let (rho, ok) = merged_no_uturn(
+            &first.rho,
+            &first.left,
+            &first.right,
+            &second.rho,
+            &second.left,
+            &second.right,
+            params.inv_mass,
+        );
+        (first.left, second.right, rho, ok)
     };
-    let rho = add_vecs(rho_left, rho_right);
-    // Check full merged span (Betancourt 2017 generalized momentum-sum U-turn check).
-    let valid = second.valid && no_uturn_rho(&rho, &left, &right, params.inv_mass);
+    let valid = second.valid && span_ok;
 
     Subtree {
         left,
@@ -620,13 +661,34 @@ fn nuts_transition<M: LogDensity>(
             }
         }
         tree_log_w = log_add_exp(tree_log_w, sub.log_sum_weight);
-        rho = add_vecs(&rho, &sub.rho);
-        if direction < 0.0 {
+        let span_ok = if direction < 0.0 {
+            let (new_rho, ok) = merged_no_uturn(
+                &sub.rho,
+                &sub.left,
+                &sub.right,
+                &rho,
+                &left,
+                &right,
+                params.inv_mass,
+            );
+            rho = new_rho;
             left = sub.left;
+            ok
         } else {
+            let (new_rho, ok) = merged_no_uturn(
+                &rho,
+                &left,
+                &right,
+                &sub.rho,
+                &sub.left,
+                &sub.right,
+                params.inv_mass,
+            );
+            rho = new_rho;
             right = sub.right;
-        }
-        valid = sub.valid && no_uturn_rho(&rho, &left, &right, params.inv_mass);
+            ok
+        };
+        valid = sub.valid && span_ok;
     }
 
     let accept_stat = if n_alpha > 0 {
@@ -664,10 +726,12 @@ fn run_single_chain<M: LogDensity>(
     let mut rng = PhiloxStream::new(rng_key);
 
     let (mut log_p, mut grad) = model.log_density_and_grad(init)?;
-    if !log_p.is_finite() || grad.iter().any(|g| !g.is_finite()) {
+    if grad.len() != dim || !log_p.is_finite() || grad.iter().any(|g| !g.is_finite()) {
         return Err(Refusal::new(
             RefusalCode::OutsidePhysicalDomain109,
-            format!("chain {chain_id} initial position yields non-finite log-density or gradient"),
+            format!(
+                "chain {chain_id} initial position yields mismatched gradient length or non-finite log-density/gradient"
+            ),
         ));
     }
 

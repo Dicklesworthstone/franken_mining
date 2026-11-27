@@ -388,6 +388,12 @@ pub(crate) fn softplus_f64(x: f64) -> f64 {
 /// Overflow-safe `BitwisePortable` `ln(exp(a) + exp(b))`.
 #[must_use]
 pub(crate) fn log_add_exp(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        return f64::NAN;
+    }
+    if a == f64::INFINITY || b == f64::INFINITY {
+        return f64::INFINITY;
+    }
     if a == f64::NEG_INFINITY {
         return b;
     }
@@ -438,13 +444,22 @@ impl<F> TapeLogDensity<F>
 where
     F: Fn(&mut Tape, &[Var]) -> Result<Var, Refusal>,
 {
-    /// Construct a tape-differentiated [`LogDensity`], refusing empty dimensions or mismatched names.
+    /// Construct a tape-differentiated [`LogDensity`], refusing empty, blank, or duplicate names.
     pub fn new(names: Vec<String>, build: F) -> Result<Self, Refusal> {
         if names.is_empty() {
             return Err(Refusal::new(
                 RefusalCode::OutsidePhysicalDomain109,
                 "LogDensity requires at least one parameter",
             ));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for name in &names {
+            if name.trim().is_empty() || !seen.insert(name.as_str()) {
+                return Err(Refusal::new(
+                    RefusalCode::OutsidePhysicalDomain109,
+                    format!("LogDensity parameter name {name:?} is empty or duplicated"),
+                ));
+            }
         }
         let dim = names.len();
         Ok(Self { dim, names, build })

@@ -234,6 +234,15 @@ pub fn certify_chains(
             "at least one parameter name is required",
         ));
     }
+    let mut seen_names = std::collections::BTreeSet::new();
+    for name in param_names {
+        if name.trim().is_empty() || !seen_names.insert(name.as_str()) {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                format!("parameter name {name:?} is empty or duplicated"),
+            ));
+        }
+    }
     for (c_idx, chain) in chains.iter().enumerate() {
         if chain.len() != draws_per_chain {
             return Err(Refusal::new(
@@ -255,8 +264,14 @@ pub fn certify_chains(
     }
 
     let mut failures = Vec::new();
-    let total_divergences: usize = chain_stats.iter().map(|s| s.post_warmup_divergences).sum();
-    let total_max_treedepth_hits: usize = chain_stats.iter().map(|s| s.max_treedepth_hits).sum();
+    let total_divergences: usize = chain_stats
+        .iter()
+        .map(|s| s.post_warmup_divergences)
+        .fold(0usize, usize::saturating_add);
+    let total_max_treedepth_hits: usize = chain_stats
+        .iter()
+        .map(|s| s.max_treedepth_hits)
+        .fold(0usize, usize::saturating_add);
     if total_divergences > thresholds.max_divergences {
         failures.push(DiagnosticFailure::DivergencesExceeded {
             total_divergences,
@@ -275,7 +290,7 @@ pub fn certify_chains(
                     limit: thresholds.min_ebfmi,
                 });
             }
-            None if stats.post_warmup_energies.len() >= 2 && thresholds.min_ebfmi > 0.0 => {
+            None if thresholds.min_ebfmi > 0.0 => {
                 failures.push(DiagnosticFailure::EbfmiTooLow {
                     chain_id: stats.chain_id,
                     ebfmi: 0.0,
@@ -348,7 +363,7 @@ pub fn certify_chains(
 #[must_use]
 pub fn compute_parameter_diagnostics(name: &str, chains: &[Vec<f64>]) -> ParameterDiagnostics {
     let mut pooled: Vec<f64> = chains.iter().flat_map(|c| c.iter().copied()).collect();
-    if pooled.is_empty() {
+    if pooled.is_empty() || pooled.iter().any(|v| !v.is_finite()) {
         return ParameterDiagnostics {
             name: name.to_string(),
             mean: 0.0,
@@ -384,6 +399,28 @@ pub fn compute_parameter_diagnostics(name: &str, chains: &[Vec<f64>]) -> Paramet
     let q05 = linear_quantile_sorted(&pooled, 0.05);
     let q50 = linear_quantile_sorted(&pooled, 0.50);
     let q95 = linear_quantile_sorted(&pooled, 0.95);
+
+    // Require >= 2 equal-length chains with >= 4 draws each for split-R-hat and split-ESS.
+    let equal_len = chains.first().map_or(0, Vec::len);
+    let well_formed =
+        chains.len() >= 2 && equal_len >= 4 && chains.iter().all(|c| c.len() == equal_len);
+    if !well_formed {
+        return ParameterDiagnostics {
+            name: name.to_string(),
+            mean,
+            sd,
+            q05,
+            q50,
+            q95,
+            split_rhat: None,
+            split_rhat_bulk: None,
+            split_rhat_folded: None,
+            bulk_ess: 0.0,
+            tail_ess: 0.0,
+            raw_ess: 0.0,
+            mcse_mean: None,
+        };
+    }
 
     let split_raw = split_chains(chains);
     let rank_bulk = rank_normalize(&split_raw);
