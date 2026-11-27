@@ -24,7 +24,7 @@ use fmine_object::store::CasStore;
 use fmine_units::UNREGISTERED_UNIT;
 
 use crate::dialects::{DialectError, IoDialectRegistry, ResolvedColumn, ResolvedUnit};
-use crate::redact::{RedactionSummary, redact_row_on_ingest};
+use crate::redact::{REDACTED_MARKER, RedactionSummary, redact_row_on_ingest, scrub_free_text};
 use crate::xlsx::{CellValue, Workbook};
 
 /// Hard quarantine byte cap (32 MiB) preventing unbounded allocation on adversarial inputs (`PO-PORT-1`).
@@ -41,7 +41,8 @@ pub struct AdmittedRow {
     pub subject_pseudonym: Option<String>,
 }
 
-/// One rejected/quarantined row with full structured explanation (nothing silently dropped, §32.1).
+/// One rejected/quarantined row with a structured explanation (nothing silently dropped, §32.1).
+/// Unvalidated text stays in the original CAS object; rejection diagnostics redact it on export.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RejectedRow {
     pub row_index: usize,
@@ -88,7 +89,10 @@ impl QuarantineError {
     pub fn to_refusal(&self) -> Refusal {
         match self {
             Self::Cas(e) => e.to_refusal(),
-            _ => Refusal::new(RefusalCode::SourceCellUnusable208, self.to_string()),
+            _ => Refusal::new(
+                RefusalCode::SourceCellUnusable208,
+                scrub_free_text(&self.to_string()).0,
+            ),
         }
     }
 }
@@ -341,7 +345,8 @@ fn classify_tabular_rows(
             rejected_rows.push(RejectedRow {
                 row_index,
                 column: "<row>".to_string(),
-                raw_value: raw_row.join(","),
+                // With a width mismatch even the alignment of personal columns is unknown.
+                raw_value: REDACTED_MARKER.to_string(),
                 code: r.code,
                 explanation: r.what,
                 fix: r.fix,
@@ -429,14 +434,14 @@ fn classify_tabular_rows(
                         let r = Refusal::new(
                             RefusalCode::SourceCellUnusable208,
                             format!(
-                                "non-numeric token '{trimmed}' in physical column '{}' ({unit_code})",
+                                "non-numeric or malformed decimal token in physical column '{}' ({unit_code}); inspect the original source row",
                                 col.column_name
                             ),
                         );
                         row_rejection = Some(RejectedRow {
                             row_index,
                             column: col.column_name.clone(),
-                            raw_value: trimmed.to_string(),
+                            raw_value: REDACTED_MARKER.to_string(),
                             code: r.code,
                             explanation: r.what,
                             fix: r.fix,
@@ -452,14 +457,14 @@ fn classify_tabular_rows(
                 let r = Refusal::new(
                     RefusalCode::UndeclaredUnitBasisOrTz107,
                     format!(
-                        "numeric value '{trimmed}' in undeclared/unregistered column '{}' ({UNREGISTERED_UNIT}, declared '{declared}')",
+                        "numeric value in undeclared/unregistered column '{}' ({UNREGISTERED_UNIT}, declared '{declared}'); inspect the original source row",
                         col.column_name
                     ),
                 );
                 row_rejection = Some(RejectedRow {
                     row_index,
                     column: col.column_name.clone(),
-                    raw_value: trimmed.to_string(),
+                    raw_value: REDACTED_MARKER.to_string(),
                     code: r.code,
                     explanation: r.what,
                     fix: r.fix,
@@ -482,6 +487,13 @@ fn classify_tabular_rows(
                 subject_pseudonym: redacted.subject_pseudonym,
             });
         }
+    }
+
+    // Header text can itself contain contact details. Failure paths get the same inline redaction
+    // as admitted text; the immutable source remains available at the row locator in CAS.
+    for rejection in &mut rejected_rows {
+        rejection.column = scrub_free_text(&rejection.column).0;
+        rejection.explanation = scrub_free_text(&rejection.explanation).0;
     }
 
     let report_digest = compute_report_digest(
@@ -535,30 +547,37 @@ fn is_censored_below_dl(s: &str) -> bool {
     parse_strict_decimal(rest).is_some_and(|v| v.is_finite() && v > 0.0)
 }
 
-fn parse_strict_decimal(s: &str) -> Option<f64> {
-    let cleaned = s.replace(',', "");
-    let body = cleaned
+/// DESIGN (BD-188): a comma is a grouping separator only in the integer part, with three digits
+/// in every group after the first. A decimal comma is never inferred from an export.
+pub(crate) fn normalize_decimal(s: &str) -> Option<String> {
+    let body = s
         .strip_prefix('-')
-        .or_else(|| cleaned.strip_prefix('+'))
-        .unwrap_or(&cleaned);
-    if body.is_empty() {
+        .or_else(|| s.strip_prefix('+'))
+        .unwrap_or(s);
+    let (integer, fraction) = body.split_once('.').unwrap_or((body, ""));
+    if !fraction.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    let mut seen_dot = false;
-    let mut seen_digit = false;
-    for b in body.bytes() {
-        if b.is_ascii_digit() {
-            seen_digit = true;
-        } else if b == b'.' && !seen_dot {
-            seen_dot = true;
-        } else {
+    if integer.contains(',') {
+        let mut groups = integer.split(',');
+        let first = groups.next()?;
+        if first.is_empty()
+            || first.len() > 3
+            || !first.bytes().all(|b| b.is_ascii_digit())
+            || !groups.all(|group| group.len() == 3 && group.bytes().all(|b| b.is_ascii_digit()))
+        {
             return None;
         }
-    }
-    if !seen_digit {
+    } else if !integer.bytes().all(|b| b.is_ascii_digit())
+        || (integer.is_empty() && fraction.is_empty())
+    {
         return None;
     }
-    cleaned.parse::<f64>().ok()
+    Some(s.replace(',', ""))
+}
+
+fn parse_strict_decimal(s: &str) -> Option<f64> {
+    normalize_decimal(s)?.parse::<f64>().ok()
 }
 
 /// Pure-Rust RFC 4180 CSV parser bounded by [`MAX_QUARANTINE_ROWS`].
@@ -678,6 +697,93 @@ mod tests {
             .and_then(|p| p.parent())
             .expect("workspace root")
             .to_path_buf()
+    }
+
+    #[test]
+    fn test_decimal_grouping_is_validated_before_numeric_conversion() {
+        for (raw, expected) in [
+            ("1,234.5", 1234.5),
+            ("-1,000", -1000.0),
+            ("+12,345,678.25", 12_345_678.25),
+            ("500000", 500_000.0),
+            (".5", 0.5),
+            ("1.", 1.0),
+        ] {
+            assert_eq!(parse_strict_decimal(raw), Some(expected), "{raw}");
+        }
+        for raw in [
+            "1,25",
+            "1,,250",
+            ",125",
+            "125,",
+            "1234,567",
+            "1,234.5,0",
+            "1.2.3",
+            "1e3",
+        ] {
+            assert_eq!(parse_strict_decimal(raw), None, "{raw}");
+        }
+        assert!(is_censored_below_dl("<1,234.5"));
+        assert!(!is_censored_below_dl("<1,25"));
+    }
+
+    #[test]
+    fn test_malformed_decimals_refuse_and_rejected_rows_keep_personal_text_in_cas() {
+        let root = workspace_root();
+        let catalog = RegistryCatalog::load_from_root(&root).expect("catalog");
+        let units = catalog.unit_symbols.iter().cloned().collect();
+        let crs = catalog.crs_codes.iter().cloned().collect();
+        let dialects = IoDialectRegistry::load_from_root(&root).expect("dialects");
+        let dir = std::env::temp_dir().join(format!(
+            "fmine-io-quarantine-rejection-redaction-{}",
+            std::process::id()
+        ));
+        let store = CasStore::open(&dir).expect("open cas");
+        let csv = b"HOLEID,EAST,NORTH,RL,MAXDEPTH,GEOLOGIST,UNDECLARED\n\
+D1,\"500,000\",\"4,500,000\",1500,100,SYNTHETIC_PERSON,\n\
+D2,\"1,25\",4500000,1500,100,SYNTHETIC_PERSON,\n\
+D3,private@example.test,4500000,1500,100,SYNTHETIC_PERSON,\n\
+D4,500000,4500000,1500,100,SYNTHETIC_PERSON,,private@example.test\n\
+D5,500000,4500000,1500,100,SYNTHETIC_PERSON,123456789\n";
+        let report = import_csv_through_quarantine(
+            &store,
+            &dialects,
+            "acquire_collar_v1",
+            csv,
+            &units,
+            &crs,
+            None,
+        )
+        .expect("row-specific report");
+        assert_eq!(report.total_data_rows, 5);
+        assert_eq!(report.admitted_rows.len(), 1);
+        assert_eq!(report.admitted_rows[0].cells[1], "500,000");
+        assert_eq!(report.admitted_rows[0].cells[2], "4,500,000");
+        assert_eq!(report.rejected_rows.len(), 4);
+        assert_eq!(report.rejected_rows[0].row_index, 3);
+        assert_eq!(report.rejected_rows[0].column, "EAST");
+        assert_eq!(report.rejected_rows[0].code, "FMINE-REF-208");
+        assert_eq!(report.rejected_rows[3].code, "FMINE-REF-107");
+        assert!(
+            report
+                .rejected_rows
+                .iter()
+                .all(|row| row.raw_value == REDACTED_MARKER)
+        );
+        let exported = format!("{report:?}");
+        for private_text in ["SYNTHETIC_PERSON", "private@example.test", "123456789"] {
+            assert!(!exported.contains(private_text), "{private_text}");
+        }
+        let missing_sheet = QuarantineError::SheetNotFound {
+            sheet: "private@example.test".into(),
+        }
+        .to_refusal();
+        assert!(!missing_sheet.what.contains("private@example.test"));
+        assert_eq!(
+            store.read_object(&report.source_cas_root).expect("source"),
+            csv
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// BD-185 done-when: rejected rows are explained with exact row index, column, raw value,
