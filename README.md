@@ -104,6 +104,13 @@ the group can wait until October 15. Waiting needs exactly 5,000/3 project tonne
 1,666 moves the last feasible date back to October 4 because Valley alone would leave 2/5 of an
 attributable tonne short. Both dates are inclusive and assume the stated allowance and site ceilings hold.
 
+If the committee has a fixed meeting, add `review_date = "2030-10-10"` to the same `[[group]]`
+row. At an allowance of 1,666 project tonnes, the brief names Valley as the remaining allocation
+and asks for another 2/3 of a project tonne, or a total whole-unit allowance of 1,667, to cover the
+2/5 attributable-tonne gap. A review after October 15 in this case leaves 1,000 attributable tonnes
+short even with unlimited shared capacity. The review calculation assumes no intervention before
+the specified meeting. The source cut remains the worksheet's `as_of` date.
+
 ### Can Treasury fund margin calls if a metal shipment pays late?
 
 ```bash

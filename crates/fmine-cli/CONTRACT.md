@@ -301,6 +301,12 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     sites, and the attributable group gap if no intervention is made by that date. The search uses
     the same capacity and ownership model and holds the baseline fixed. The field is null when the
     allowance cannot already cover the gap or when the baseline covers the target.
+    DESIGN (bd-bo04). An optional `review_date` on the group row uses the submitted shared
+    allowance and must fall between `as_of` and the reporting date, inclusive. It admits site
+    ceilings whose action deadlines still hold on that date. The `review_check` retains the
+    attributable gap at the submitted allowance, the exact minimum additional capacity and one
+    dated allocation, or the irreducible gap when local ceilings are insufficient. Source
+    availability still uses the original `as_of` cut.
   - Project estimates retain the complete declared cohort and hold out a latest approval. Only comparable
     completed cost outcomes known strictly before that approval enter the lower-median actual/approval
     ratio. The held-out error uses the reported comparable actual. Selection, original scope and price

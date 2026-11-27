@@ -966,6 +966,7 @@ fn group_recovery_returns_an_exact_capacity_ask_and_dated_site_allocation() {
 fn group_recovery_distinguishes_the_latest_date_from_the_minimum_draw_date() {
     let c = card("group_window");
     let plan = c.get("shared_capacity_plan").expect("shared target plan");
+    assert!(plan.get("review_check").is_none());
     assert_eq!(
         plan.get("decision_by").and_then(Json::as_str),
         Some("2030-10-04")
@@ -1003,6 +1004,110 @@ fn group_recovery_distinguishes_the_latest_date_from_the_minimum_draw_date() {
         run("group_window", false).stdout,
         run("group_window", false).stdout
     );
+}
+
+#[test]
+fn group_recovery_prices_the_fixed_review_date_and_lists_only_eligible_sites() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let example = include_str!("../../../tests/capital/executive_group_window.toml");
+    let timestamp_ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!(
+        "fmine-group-review-{}-{timestamp_ns}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&directory).expect("scratch review worksheets");
+    let execute = |path: &Path, format: &str| {
+        let output = Command::new(env!("CARGO_BIN_EXE_fmine"))
+            .args(["decide", "program"])
+            .arg(path)
+            .arg(format)
+            .output()
+            .expect("run CLI");
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output.stdout
+    };
+    for (limit, extra, gap, status, wait_by) in [
+        (
+            "1666",
+            "2/3",
+            "2/5",
+            "additional_capacity_required",
+            "2030-10-04",
+        ),
+        ("1667", "0", "0", "within_allowance", "2030-10-15"),
+    ] {
+        let path = directory.join(format!("allowance-{limit}.toml"));
+        let data = example.replace(
+            "shared_incremental_project_capacity = \"1667\"",
+            &format!(
+                "shared_incremental_project_capacity = \"{limit}\"\nreview_date = \"2030-10-10\""
+            ),
+        );
+        std::fs::write(&path, &data).expect("review worksheet");
+        let bytes = execute(&path, "--json");
+        let report = parse(&bytes).expect("JSON");
+        let payload = report.get("payload").expect("payload");
+        assert_eq!(
+            payload.get("worksheet").and_then(Json::as_str),
+            Some(data.as_str())
+        );
+        let plan = payload.get("shared_capacity_plan").expect("group plan");
+        assert_eq!(
+            plan.get("minimum_project_capacity").and_then(Json::as_str),
+            Some("1000")
+        );
+        assert_eq!(
+            plan.get("wait_window")
+                .and_then(|v| v.get("act_by"))
+                .and_then(Json::as_str),
+            Some(wait_by)
+        );
+        let review = plan.get("review_check").expect("fixed-date calculation");
+        for (key, expected) in [
+            ("review_date", "2030-10-10"),
+            ("minimum_project_capacity", "5000/3"),
+            ("minimum_whole_unit_allowance", "1667"),
+            ("additional_project_capacity_required", extra),
+            ("gap_at_submitted_capacity_attributable", gap),
+            ("status", status),
+        ] {
+            assert_eq!(
+                review.get(key).and_then(Json::as_str),
+                Some(expected),
+                "{key}"
+            );
+        }
+        let rows = review
+            .get("allocations")
+            .and_then(Json::as_array)
+            .expect("allocation");
+        assert_eq!(rows.len(), 1);
+        for (key, expected) in [
+            ("site", "Valley"),
+            ("act_by", "2030-10-15"),
+            ("project_increment", "5000/3"),
+            ("attributable_increment", "1000"),
+        ] {
+            assert_eq!(
+                rows[0].get(key).and_then(Json::as_str),
+                Some(expected),
+                "{key}"
+            );
+        }
+        let brief = String::from_utf8(execute(&path, "--brief")).expect("brief");
+        assert!(brief.contains("At the 2030-10-10 review"));
+        assert!(brief.contains("Valley needs 5000/3 project units for 1000 attributable units in the review-date allocation"));
+        assert_eq!(bytes, execute(&path, "--json"));
+    }
 }
 
 #[test]

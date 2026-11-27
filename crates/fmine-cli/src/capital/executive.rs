@@ -1274,12 +1274,109 @@ fn show_shared_wait_window(
     ))
 }
 
+fn group_allocation_rows(
+    card: &mut Card,
+    plan: &TargetAllocation<'_>,
+    label: &str,
+) -> Result<String> {
+    let mut allocations = Vec::with_capacity(plan.sites.len());
+    for (site, attributable) in &plan.sites {
+        let project = fraction(*attributable, site.interest_bp)?;
+        let attributable = fraction(*attributable, 10000)?;
+        card.findings.push(format!(
+            "{} needs {project} project units for {attributable} attributable units in {label}. Act by {}.",
+            site.id, site.act_by
+        ));
+        allocations.push(format!(
+            r#"{{"site":{},"project_increment":{},"attributable_increment":{},"act_by":{}}}"#,
+            js(site.id),
+            js(&project),
+            js(&attributable),
+            js(site.act_by)
+        ));
+    }
+    Ok(allocations.join(","))
+}
+
+fn show_fixed_review(
+    card: &mut Card,
+    prioritized_sites: &[SiteUplift<'_>],
+    required_attributable: i128,
+    limit: i128,
+    unit: &str,
+    review: &str,
+) -> Result<String> {
+    let eligible = || {
+        prioritized_sites
+            .iter()
+            .filter(|site| site.act_by >= review)
+    };
+    let available = maximum_shared_uplift(eligible(), limit);
+    let gap = fraction((required_attributable - available).max(0), 10000)?;
+    let detail = match minimum_target_allocation(eligible(), required_attributable) {
+        Err(local_gap) => {
+            let ceiling_gap = fraction(local_gap, 10000)?;
+            card.findings.push(format!(
+                "At the {review} review, remaining site ceilings leave {ceiling_gap} {unit} attributable short even with unlimited shared capacity."
+            ));
+            if required_attributable - available > local_gap {
+                card.findings.push(format!(
+                    "At the submitted allowance, the review-date shortfall is {gap} {unit} attributable."
+                ));
+            }
+            format!(
+                r#""status":"site_ceilings_insufficient","minimum_project_capacity":null,"minimum_whole_unit_allowance":null,"additional_project_capacity_required":null,"local_ceiling_gap_attributable":{},"allocations":[]"#,
+                js(&ceiling_gap)
+            )
+        }
+        Ok(plan) => {
+            let (num, den) = plan.project_units;
+            let minimum = fraction(num, den)?;
+            let extra = (num - limit * den).max(0);
+            let extra_text = fraction(extra, den)?;
+            let smallest_whole = (num + den - 1) / den;
+            let status = if required_attributable == 0 {
+                card.findings.push(format!(
+                    "The baseline covers the target at the {review} review."
+                ));
+                "baseline_covers_target"
+            } else {
+                card.findings.push(format!(
+                    "At the {review} review, eligible interventions need {minimum} {unit} of shared capacity on a 100%-project basis."
+                ));
+                if extra > 0 {
+                    card.findings.push(format!(
+                        "An additional {extra_text} {unit} of shared capacity would close the {gap} {unit} attributable gap at that review. The smallest sufficient whole-unit allowance is {smallest_whole}."
+                    ));
+                    "additional_capacity_required"
+                } else {
+                    "within_allowance"
+                }
+            };
+            let allocations = group_allocation_rows(card, &plan, "the review-date allocation")?;
+            format!(
+                r#""status":{},"minimum_project_capacity":{},"minimum_whole_unit_allowance":{},"additional_project_capacity_required":{},"local_ceiling_gap_attributable":"0","allocations":[{allocations}]"#,
+                js(status),
+                js(&minimum),
+                js(&smallest_whole.to_string()),
+                js(&extra_text)
+            )
+        }
+    };
+    Ok(format!(
+        r#","review_check":{{"review_date":{},"gap_at_submitted_capacity_attributable":{},{detail}}}"#,
+        js(review),
+        js(&gap)
+    ))
+}
+
 fn show_shared_target_plan(
     card: &mut Card,
     prioritized_sites: &[SiteUplift<'_>],
     required_attributable: i128,
     limit: i128,
     unit: &str,
+    review: Option<&str>,
 ) -> Result<()> {
     let detail = match minimum_target_allocation(prioritized_sites, required_attributable) {
         Err(local_gap) => {
@@ -1325,34 +1422,36 @@ fn show_shared_target_plan(
                     "The first intervention in this allocation is due by {deadline}."
                 ));
             }
-            let mut allocations = Vec::new();
-            for (site, attributable) in &plan.sites {
-                let project = fraction(*attributable, site.interest_bp)?;
-                let attributable = fraction(*attributable, 10000)?;
-                card.findings.push(format!(
-                    "{} needs {project} project units for {attributable} attributable units in this allocation. Act by {}.",
-                    site.id, site.act_by
-                ));
-                allocations.push(format!(r#"{{"site":{},"project_increment":{},"attributable_increment":{},"act_by":{}}}"#,
-                    js(site.id), js(&project), js(&attributable), js(site.act_by)));
-            }
+            let allocations = group_allocation_rows(card, &plan, "this allocation")?;
             let decision_by = first_deadline.map_or_else(|| "null".into(), js);
             format!(
-                r#""status":{},"minimum_project_capacity":{},"minimum_whole_unit_allowance":{},"additional_project_capacity_required":{},"decision_by":{decision_by},"local_ceiling_gap_attributable":"0","allocations":[{}]"#,
+                r#""status":{},"minimum_project_capacity":{},"minimum_whole_unit_allowance":{},"additional_project_capacity_required":{},"decision_by":{decision_by},"local_ceiling_gap_attributable":"0","allocations":[{allocations}]"#,
                 js(status),
                 js(&minimum),
                 js(&smallest_whole.to_string()),
-                js(&shortfall_text),
-                allocations.join(",")
+                js(&shortfall_text)
             )
         }
     };
     let wait_window =
         show_shared_wait_window(card, prioritized_sites, required_attributable, limit, unit)?;
+    let review_check = review
+        .map(|review| {
+            show_fixed_review(
+                card,
+                prioritized_sites,
+                required_attributable,
+                limit,
+                unit,
+                review,
+            )
+        })
+        .transpose()?
+        .unwrap_or_default();
     card.detail = Some((
         "shared_capacity_plan",
         format!(
-            r#"{{"unit":{},"submitted_project_capacity":{},"attributable_increase_needed":{},{detail},"wait_window":{wait_window}}}"#,
+            r#"{{"unit":{},"submitted_project_capacity":{},"attributable_increase_needed":{},{detail},"wait_window":{wait_window}{review_check}}}"#,
             js(unit),
             js(&limit.to_string()),
             js(&fraction(required_attributable, 10000)?)
@@ -1372,7 +1471,7 @@ fn group_recovery(doc: &TomlDoc, as_of: &str) -> Result<Card> {
             "target",
             "common_capacity_basis",
         ],
-        &["shared_incremental_project_capacity"],
+        &["shared_incremental_project_capacity", "review_date"],
         as_of,
     )?;
     let through = date(&g, "through")?;
@@ -1384,6 +1483,16 @@ fn group_recovery(doc: &TomlDoc, as_of: &str) -> Result<Card> {
         .contains_key("shared_incremental_project_capacity")
         .then(|| qty(&g, "shared_incremental_project_capacity"))
         .transpose()?;
+    let review = g
+        .contains_key("review_date")
+        .then(|| date(&g, "review_date"))
+        .transpose()?;
+    if review.is_some_and(|review| review < as_of || review > through || shared_capacity.is_none())
+    {
+        return Err(invalid(
+            "review_date requires a shared capacity allowance and must fall from as_of through the group reporting date",
+        ));
+    }
     let site_ceiling = if shared_capacity.is_some() {
         "Site maximum attributable before shared limit"
     } else {
@@ -1493,6 +1602,7 @@ fn group_recovery(doc: &TomlDoc, as_of: &str) -> Result<Card> {
             (target - plan).max(0),
             limit,
             get(&g, "unit")?,
+            review,
         )?;
     }
     if capacity >= target {
@@ -2333,6 +2443,78 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn fixed_recovery_review_uses_inclusive_dates_and_requires_a_valid_scope() {
+        use fmine_io::omf::json::{Json, parse};
+
+        let group = |date: &str, limit: &str| {
+            GROUP_WINDOW.replace(
+                "shared_incremental_project_capacity = \"1667\"",
+                &format!(
+                    "shared_incremental_project_capacity = \"{limit}\"\nreview_date = \"{date}\""
+                ),
+            )
+        };
+        let result = |text: &str| {
+            let payload = evaluate(text)
+                .expect("valid date and allowance")
+                .payload_json;
+            parse(payload.as_bytes())
+                .expect("JSON payload")
+                .get("shared_capacity_plan")
+                .expect("shared plan")
+                .get("review_check")
+                .expect("review check")
+                .clone()
+        };
+        for (date, min, status) in [
+            ("2030-09-30", Some("1000"), "within_allowance"),
+            ("2030-10-04", Some("1000"), "within_allowance"),
+            ("2030-10-05", Some("5000/3"), "within_allowance"),
+            ("2030-10-15", Some("5000/3"), "within_allowance"),
+            ("2030-10-16", None, "site_ceilings_insufficient"),
+            ("2030-12-31", None, "site_ceilings_insufficient"),
+        ] {
+            let review = result(&group(date, "1667"));
+            let field = |key| review.get(key).and_then(Json::as_str);
+            assert_eq!(field("minimum_project_capacity"), min);
+            assert_eq!(field("status"), Some(status));
+            assert_eq!(
+                field("local_ceiling_gap_attributable"),
+                Some(if min.is_some() { "0" } else { "1000" })
+            );
+        }
+        let smaller =
+            group("2030-10-15", "400").replace("maximum = \"9700\"", "maximum = \"8500\"");
+        let review = result(&smaller);
+        assert_eq!(
+            review
+                .get("local_ceiling_gap_attributable")
+                .and_then(Json::as_str),
+            Some("700")
+        );
+        assert_eq!(
+            review
+                .get("gap_at_submitted_capacity_attributable")
+                .and_then(Json::as_str),
+            Some("760")
+        );
+        let baseline = group("2030-10-16", "0").replace("plan = \"7200\"", "plan = \"8200\"");
+        assert_eq!(
+            result(&baseline).get("status").and_then(Json::as_str),
+            Some("baseline_covers_target")
+        );
+        for date in ["2030-09-29", "2031-01-01", "2030-09-31"] {
+            assert!(evaluate(&group(date, "1667")).is_err());
+        }
+        let missing_allowance = group("2030-10-04", "1667")
+            .replace("shared_incremental_project_capacity = \"1667\"\n", "");
+        assert!(evaluate(&missing_allowance).is_err());
+        let later_source = group("2030-10-10", "1667")
+            .replace("known_on = \"2030-09-30\"", "known_on = \"2030-10-05\"");
+        assert!(evaluate(&later_source).is_err());
     }
 
     #[test]
