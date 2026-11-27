@@ -66,4 +66,4 @@ The result line is `runs/long-ledger-88d1281.ndjson` under the fuzz target direc
 
 - Executed on one ISA (`aarch64-macos`) with debug assertions enabled and no sanitizer.
 - Solo verification; not independently replicated on `x86_64-linux`.
-- Covers the `FMT-LEDGER-1` batch codec only. Segment files (`FMT-SEG-1`) have their own target, `fuzz/fuzz_targets/segment.rs`, and their own 24 h run (BD-082).
+- Covers the `FMT-LEDGER-1` batch codec only. Segment files (`FMT-SEG-1`) have their own target, `fuzz/fuzz_targets/segment.rs`, and their own 24 h run (BD-082, `docs/delivery/segment-fuzz-24h.md`).
