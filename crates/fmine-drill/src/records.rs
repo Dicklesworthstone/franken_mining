@@ -707,9 +707,9 @@ pub enum QcKind {
         crm_id: String,
         /// Certified mean, mass fraction in [0, 1].
         certified_mass_fraction: f64,
-        /// Certified between-lab sigma, mass fraction (σ_C).
+        /// Certified within-lab sigma, mass fraction (σ_C; plan §12.4).
         sigma_c: f64,
-        /// Certified within-lab sigma, mass fraction (σ_L).
+        /// Certified between-lab sigma, mass fraction (σ_L; plan §12.4).
         sigma_l: f64,
         /// Source of the certificate.
         certificate_source: String,
