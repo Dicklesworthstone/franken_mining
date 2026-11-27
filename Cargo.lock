@@ -319,6 +319,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-projection"
+version = "0.1.0"
+dependencies = [
+ "fmine-core",
+ "fmine-evidence",
+ "fmine-ledger",
+]
+
+[[package]]
 name = "fmine-public"
 version = "0.1.0"
 dependencies = [

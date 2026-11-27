@@ -33,6 +33,7 @@ members = [
     "crates/fmine-capital",
     "crates/fmine-io",
     "crates/fmine-public",
+    "crates/fmine-projection",
     "crates/fmine-metrics",
     "crates/fmine-cli",
     "crates/fmine-report",

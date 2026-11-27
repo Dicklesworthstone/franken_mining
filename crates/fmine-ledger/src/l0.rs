@@ -530,6 +530,12 @@ impl L0Ledger {
         self.cell(cell_id)?.snapshot_at(committed_count)
     }
 
+    /// The committed batches of `cell_id` in sequence order, the ones its head hash chains (`BD-120`: a
+    /// projection catches up or rebuilds from these). Quarantined lower-epoch batches are not among them.
+    pub fn batches(&self, cell_id: &str) -> Result<&[DeltaBatch], L0Error> {
+        Ok(self.cell(cell_id)?.authority.batches())
+    }
+
     /// Full append-only version history for `key` in `cell_id` (`INV-003`).
     pub fn key_history(&self, cell_id: &str, key: &str) -> Result<&[KeyVersion], L0Error> {
         let cell = self.cell(cell_id)?;
