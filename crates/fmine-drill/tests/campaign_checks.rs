@@ -14,13 +14,14 @@
 use fmine_drill::checks::{
     CheckPolicy, CollarDtmState, ComparisonState, DependenceState, DrillIndex, DtmElevation,
     FlaggedEntry, IntervalGrade, Reassay, RegimeState, RunState, collar_dtm, compare_campaigns,
-    qaqc_regimes, recovery_grade, select_for_estimate, survey_runs,
+    qaqc_regimes, recovery_grade, run_separation, select_for_estimate, survey_runs,
 };
 use fmine_drill::records::{
     self, AssayResult, AssayValue, BatchFlag, Collar, DrillRecord, HoleType, Interval, Orientation,
     QaqcRegime, Recovery, RecoveryMethod, RunDirection, Sample, SampleDiscard, Survey,
 };
 use fmine_drill::store::{Change, commit};
+use fmine_drill::survey_error::ErrorModel;
 use fmine_evidence::RefusalCode;
 use fmine_ledger::l0::L0Ledger;
 
@@ -356,6 +357,32 @@ fn test_each_check_fires_on_its_planted_defect_in_a_seeded_campaign() {
             .count(),
         HOLES
     );
+    // The runs' separation against the survey error the stations state: D07 only; the RC holes have one run.
+    let mut apart = Vec::new();
+    let mut single_run = 0;
+    for collar in &c.collars {
+        let surveys: Vec<Survey> = c
+            .surveys
+            .iter()
+            .filter(|s| s.hole_id == collar.hole_id)
+            .cloned()
+            .collect();
+        match run_separation(collar, &surveys, &ErrorModel::random(), &policy).unwrap() {
+            None => single_run += 1,
+            Some(r) => {
+                if collar.hole_id == "D07" {
+                    println!(
+                        "D07 runs: {:.3} m apart at {} mm, sigma {:.3} m, ratio {:.2}",
+                        r.separation_m, r.at_depth_mm, r.sigma_m, r.ratio
+                    );
+                }
+                if r.state == RunState::Inconsistent {
+                    apart.push(r.hole_id);
+                }
+            }
+        }
+    }
+    assert_eq!((apart, single_run), (vec!["D07".to_string()], HOLES));
 
     // Collar against DTM: D03 only.
     let off: Vec<&str> = c
@@ -542,6 +569,20 @@ fn test_the_survey_and_collar_checks_have_their_hand_worked_answers() {
         h.hypot(v)
     );
     assert_eq!(runs.state, RunState::Consistent, "1° against a 1.06° limit");
+    // The same separation against its survey error. Two stations 100 m apart weigh 50 m each, so a dip error
+    // of 0.25° moves each run's point by 0.25°·√(50² + 50²) at right angles to the hole: σ ≈ 0.436 m for the
+    // two runs, a limit of 1.31 m.
+    let apart = run_separation(&hole, &surveys, &ErrorModel::random(), &policy)
+        .unwrap()
+        .unwrap();
+    assert_eq!(apart.separation_m, runs.separation_m.unwrap());
+    let per_run = 0.25_f64.to_radians() * 5_000.0_f64.sqrt();
+    assert!(
+        (apart.sigma_m - per_run * 2.0_f64.sqrt()).abs() < 2e-3,
+        "{apart:?} vs {}",
+        per_run * 2.0_f64.sqrt()
+    );
+    assert_eq!(apart.state, RunState::Consistent);
 
     // Collar against DTM: limit 3·√(0.1² + 0.3²) = 0.9487 m.
     let elevation = hole.actual.as_ref().unwrap().elevation_m;

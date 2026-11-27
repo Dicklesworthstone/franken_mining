@@ -10,8 +10,10 @@
 //!   for review before it joins an estimate.
 //! - **Survey checks (E381).** In/out run consistency per hole: at each depth surveyed both ways, the dip and
 //!   azimuth differences against `k` times their combined one-sigma accuracies, and the distance between the two
-//!   runs' desurveyed traces at their deepest shared depth. Collar against DTM: the residual of the surveyed
-//!   collar elevation against `k` times the combined one-sigma of collar and DTM.
+//!   runs' desurveyed traces at their deepest shared depth. [`run_separation`] tests that distance against `k`
+//!   times its one-sigma from the two runs' survey-error covariances ([`crate::survey_error`]); the collar's
+//!   error is shared by both runs and cancels. Collar against DTM: the residual of the surveyed collar elevation
+//!   against `k` times the combined one-sigma of collar and DTM.
 //! - **`qaqc_regime` per campaign.** The regimes its results declare; a campaign that mixes them is reported.
 //! - **`CommittedFlagged` and retention (E223, E224).** The results of a flagged lab batch are flagged; each
 //!   estimate says explicitly whether they enter. A flagged result whose sample was discarded after QC cannot be
@@ -21,12 +23,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fmine_core::det;
 
-use crate::desurvey::{Point, desurvey};
+use crate::desurvey::{Direction, Point, desurvey};
 use crate::records::{
     AssayResult, BatchFlag, Collar, DrillError, HoleType, Interval, QaqcRegime, RecoveryMethod,
     RunDirection, Sample, SampleDiscard, Survey,
 };
 use crate::stats::{mann_whitney, quantile, spearman};
+use crate::survey_error::{Covariance, ErrorModel, propagate};
 
 /// Thresholds the checks share.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -596,6 +599,104 @@ fn distance(a: Point, b: Point) -> f64 {
         det::hypot(a.easting_m - b.easting_m, a.northing_m - b.northing_m),
         a.elevation_m - b.elevation_m,
     )
+}
+
+/// The distance between a hole's in-run and out-run traces against its survey error.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunSeparation {
+    /// The hole.
+    pub hole_id: String,
+    /// The deepest depth both runs surveyed, mm.
+    pub at_depth_mm: u64,
+    /// The distance between the runs' points there, m.
+    pub separation_m: f64,
+    /// Its one-sigma along the line between them from both runs' angle errors, m; the runs' errors are taken as
+    /// independent. At zero separation, the root of the summed covariance's trace.
+    pub sigma_m: f64,
+    /// `separation / (k·σ)`; above 1 is inconsistent.
+    pub ratio: f64,
+    /// [`RunState::Consistent`] or [`RunState::Inconsistent`].
+    pub state: RunState,
+}
+
+/// The in/out run separation of `collar`'s hole tested against its survey error under `model` (`bd-zx57`); `None`
+/// when either run has no surveyed station.
+///
+/// # Errors
+/// As [`survey_runs`], and the model refusals of [`propagate`].
+pub fn run_separation(
+    collar: &Collar,
+    surveys: &[Survey],
+    model: &ErrorModel,
+    policy: &CheckPolicy,
+) -> Result<Option<RunSeparation>, DrillError> {
+    policy.check()?;
+    if let Some(s) = surveys.iter().find(|s| s.hole_id != collar.hole_id) {
+        return Err(DrillError::invalid(
+            "checks.surveys",
+            format!(
+                "survey '{}' is of hole '{}', not '{}'",
+                s.survey_id, s.hole_id, collar.hole_id
+            ),
+        ));
+    }
+    let run = |direction: RunDirection| -> Vec<Survey> {
+        surveys
+            .iter()
+            .filter(|s| s.run == direction && s.orientation.is_some())
+            .cloned()
+            .collect()
+    };
+    let (inward, outward) = (run(RunDirection::In), run(RunDirection::Out));
+    let deepest = |v: &[Survey]| v.iter().map(|s| s.depth_mm).max();
+    let (Some(a), Some(b)) = (deepest(&inward), deepest(&outward)) else {
+        return Ok(None);
+    };
+    let depth = a.min(b);
+    let (ti, to) = (
+        propagate(collar, &inward, model)?,
+        propagate(collar, &outward, model)?,
+    );
+    let (pi, po) = (ti.trace().at(depth).point, to.trace().at(depth).point);
+    let separation = distance(pi, po);
+    // The collar is one point for both runs: only the angle terms move them apart.
+    let angles = |c: &crate::survey_error::PositionCovariance| -> Covariance {
+        let mut m = c.total;
+        for (row, collar_row) in m.enu_m2.iter_mut().zip(&c.collar.enu_m2) {
+            for (v, k) in row.iter_mut().zip(collar_row) {
+                *v -= k;
+            }
+        }
+        m
+    };
+    let (ci, co) = (
+        angles(&ti.covariance_at(depth)),
+        angles(&to.covariance_at(depth)),
+    );
+    let variance = if separation > 0.0 {
+        let u = Direction {
+            east: (po.easting_m - pi.easting_m) / separation,
+            north: (po.northing_m - pi.northing_m) / separation,
+            up: (po.elevation_m - pi.elevation_m) / separation,
+        };
+        ci.variance_along(u) + co.variance_along(u)
+    } else {
+        (0..3).map(|i| ci.enu_m2[i][i] + co.enu_m2[i][i]).sum()
+    };
+    let sigma = det::sqrt(variance.max(0.0));
+    let r = ratio(separation, policy.sigma_multiple * sigma);
+    Ok(Some(RunSeparation {
+        hole_id: collar.hole_id.clone(),
+        at_depth_mm: depth,
+        separation_m: separation,
+        sigma_m: sigma,
+        ratio: r,
+        state: if r > 1.0 {
+            RunState::Inconsistent
+        } else {
+            RunState::Consistent
+        },
+    }))
 }
 
 /// The DTM's elevation at a collar's position, with its one-sigma accuracy.
