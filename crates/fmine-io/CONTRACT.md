@@ -7,7 +7,7 @@ Pure-Rust ZIP/DEFLATE, XLSX workbook, HTML table, OMF 2 / Parquet subset, draft 
 - **Layer:** V
 - **Subsystem:** Portal
 - **LOC budget:** 40,000 planned / 46,000 ceiling
-- **Allowed Module Families:** `["xlsx", "zip_inflate", "styles", "numfmt", "numtok", "reliance", "forecast", "omf", "minelib_report", "source", "cas_ingest", "dialects", "quarantine", "redact", "strings", "import_rules", "intercept", "dxf", "las"]`
+- **Allowed Module Families:** `["xlsx", "zip_inflate", "styles", "numfmt", "numtok", "reliance", "forecast", "omf", "minelib_report", "source", "cas_ingest", "dialects", "quarantine", "redact", "strings", "import_rules", "intercept", "dxf", "las", "lab_certificate"]`
 
 ## 2. Inputs
 ### Mathematical & Domain Formulation
@@ -564,12 +564,16 @@ cooperating processes; independently retained pins detect a changed final head b
 The separate timestamp adapter authenticates the TSA's assertion under the caller's selected roots. It does
 not select or endorse a TSA, fetch revocation information, perform network verification or establish that a
 local test authority is an independent time witness. Its input fingerprints permit the trust choice to be audited.
+- `lab_certificate` proves that the copy is the original a record names, not that the lab signed it: the
+  original's own signature (signed PDF, lab PKI) is not checked. No importer reads certificates from a lab's
+  delivery yet.
 
 ## 11. Public API
 - `xlsx::{Workbook, CellValue, MinimalCell, MinimalSheet, build_minimal_xlsx, build_minimal_xlsx_styled}`
 - `HtmlDocument`, `HtmlSourceTable`, `HtmlSourceCell`, `HtmlTable`, `extract_html_tables`, `IoError`
 - `forecast::{Journal, prefix, timestamp}`, `reliance::{Journal, ReleaseKey, ReissueRequest, decode_journal, read_artifact}`
 - `omf` (OMF 2 reader, block proportions, pit/shell/schedule/design adapters), `minelib_report`, `source`, `numfmt`, `numtok`, `styles`, `zip_inflate`.
+- `lab_certificate::{CertificateOriginal, IngestedCertificate, CertificateError, ingest_certificate, verify_certificate}`
 
 ## 12. Proof obligations
 ### Proof obligations and controls (`PO-*`)
@@ -754,3 +758,14 @@ local test authority is an independent time witness. Its input fingerprints perm
   unreadable file, `FMINE-REF-107` on invalid metadata/digest hex), emitting order-independent `CIB1` batch
   digests and digest-stable zero-write re-ingests (`test_cas_reingest_is_digest_stable`,
   `test_cas_batch_registered_filings_atomic_preflight_and_order_invariant_reingest`).
+- `lab_certificate` (`BD-171`, lab certificate originals in CAS): `ingest_certificate` stores the original
+  root-last in `FMT-CAS-1` and returns the `fmine_drill` `LabCertificate` record, which names it by the
+  original's SHA-256 and by the copy's root. A digest the lab states is checked first; a mismatch
+  (`FMINE-REF-505`), an empty original (`FMINE-REF-506`) or a record the drill checks refuse stores nothing.
+  The same bytes again give the same root and write no chunk. `verify_certificate` reads the root back and
+  refuses a copy that is missing or damaged (the CAS code), swapped for another certificate's, or stored under
+  another media type (`FMINE-REF-505`)
+  (`lab_certificate::test_an_ingested_certificate_is_linked_to_its_copy_by_digest_and_root`,
+  `lab_certificate::test_the_same_original_again_gives_the_same_root_and_writes_no_chunk`,
+  `lab_certificate::test_an_original_that_cannot_be_linked_is_refused_and_nothing_is_stored`,
+  `lab_certificate::test_a_swapped_damaged_missing_or_retyped_copy_does_not_verify`).

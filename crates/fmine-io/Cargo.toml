@@ -13,6 +13,7 @@ fmine-calib = { path = "../fmine-calib" }
 fmine-claim = { path = "../fmine-claim" }
 fmine-core = { path = "../fmine-core" }
 fmine-crs = { path = "../fmine-crs" }
+fmine-drill = { path = "../fmine-drill" }
 fmine-evidence = { path = "../fmine-evidence" }
 fmine-explore = { path = "../fmine-explore" }
 fmine-geom = { path = "../fmine-geom" }

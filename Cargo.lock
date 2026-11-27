@@ -216,6 +216,7 @@ dependencies = [
  "fmine-claim",
  "fmine-core",
  "fmine-crs",
+ "fmine-drill",
  "fmine-evidence",
  "fmine-explore",
  "fmine-geom",
