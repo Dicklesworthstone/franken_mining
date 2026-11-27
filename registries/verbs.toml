@@ -111,6 +111,12 @@ mutates_authority = false
 description = "Build and check capacity-constrained MineLib or OMF production schedules with exact feasibility and an integer Lagrangian upper bound"
 
 [[verb]]
+path = "plan cutoff"
+subsystem = "Pushback"
+mutates_authority = false
+description = "Calculate exact Lane limiting grades and compare a declared feed-grade band for one explicit planning scenario"
+
+[[verb]]
 path = "plan shells"
 subsystem = "Pushback"
 mutates_authority = false

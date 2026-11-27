@@ -50,6 +50,261 @@ fn ratio(value: &Json) -> Rat {
     Rat::new(integer("numerator"), integer("denominator")).unwrap()
 }
 
+fn lane(root: &std::path::Path, input: &str, format: &str) -> std::process::Output {
+    Command::new(binary())
+        .args([
+            "plan",
+            "cutoff",
+            "--input",
+            input,
+            "--format",
+            format,
+            "--workspace",
+        ])
+        .arg(root)
+        .output()
+        .unwrap()
+}
+
+fn lane_json(output: &std::process::Output) -> Json {
+    let report = parse(&output.stdout).unwrap();
+    assert_eq!(report.get("verb").unwrap().as_str(), Some("plan cutoff"));
+    assert_eq!(
+        report.get("exit_code").unwrap().i64(),
+        output.status.code().map(i64::from)
+    );
+    assert!(
+        report
+            .get("flags")
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .iter()
+            .all(|(_, value)| { value.as_bool() == Some(false) })
+    );
+    report
+}
+
+#[test]
+fn lane_cutoff_binary_replays_pinned_symbolic_ratios_and_grade_screens() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let input = "tests/planning/lane_cutoff.json";
+    let result = lane(&root, input, "json");
+    let report = lane_json(&result);
+    assert!(result.status.success(), "{report:?}");
+    assert_eq!(result.stdout, lane(&root, input, "json").stdout);
+    let p = report.get("payload").unwrap();
+    let source = p.get("source").unwrap();
+    let bytes = std::fs::read(root.join(input)).unwrap();
+    assert_eq!(source.get("bytes").unwrap().u64(), Some(bytes.len() as u64));
+    let digest = sha256(&bytes).to_hex();
+    assert_eq!(
+        source.get("sha256").unwrap().as_str(),
+        Some(digest.as_str())
+    );
+    for (key, expected) in [
+        ("input_evidence", "synthetic"),
+        ("calibration", "uncalibrated"),
+        ("metal", "Au"),
+        ("metal_unit", "g"),
+        ("ore_mass_basis", "dry_metric_tonne"),
+        ("ownership_basis", "100_percent_project"),
+    ] {
+        assert_eq!(p.get(key).unwrap().as_str(), Some(expected), "{key}");
+    }
+    let rows = p.get("limiting_cutoffs").unwrap().as_array().unwrap();
+    let oracle = include_str!("../../../fixtures/fmine-derive/golden_formulas.txt");
+    let expected = [
+        ("lane_mine_cutoff", "mine", "entire_band_clears"),
+        ("lane_mill_cutoff", "mill", "entire_band_below"),
+        ("lane_refinery_cutoff", "market", "straddles"),
+    ];
+    assert_eq!(rows.len(), expected.len());
+    for (row, (id, case, screen)) in rows.iter().zip(expected) {
+        let expected_grade = oracle
+            .lines()
+            .find_map(|line| {
+                let mut cols = line.split('\t');
+                if cols.next() == Some("FORMULA") && cols.next() == Some(id) {
+                    cols.nth(5)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        assert_eq!(row.get("limiting_constraint").unwrap().as_str(), Some(case));
+        assert_eq!(
+            row.get("cutoff_grade").unwrap().as_str(),
+            Some(expected_grade)
+        );
+        assert_eq!(row.get("feed_grade_screen").unwrap().as_str(), Some(screen));
+    }
+    let markdown = lane(&root, input, "markdown");
+    assert!(markdown.status.success());
+    let markdown = String::from_utf8(markdown.stdout).unwrap();
+    assert!(markdown.contains("| mine | 1/5 | Entire band clears |"));
+    assert!(markdown.contains("| mill | 4/15 | Entire band below |"));
+    assert!(markdown.contains("| market | 5/23 | Straddles |"));
+    assert!(markdown.contains(&digest));
+    let robot = Command::new(binary())
+        .args(["robot-docs", "--json"])
+        .output()
+        .unwrap();
+    assert!(robot.status.success());
+    assert!(
+        parse(&robot.stdout)
+            .unwrap()
+            .get("payload")
+            .unwrap()
+            .get("plan_cutoff")
+            .is_some()
+    );
+}
+
+#[test]
+fn lane_cutoff_binary_preserves_units_and_refuses_incomplete_or_invalid_basis() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let scratch = std::env::temp_dir().join(format!(
+        "fmine-lane-cutoff-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&scratch).unwrap();
+    let original = std::fs::read_to_string(root.join("tests/planning/lane_cutoff.json")).unwrap();
+    let write = |name: &str, text: &str| {
+        std::fs::write(scratch.join(name), text).unwrap();
+        lane_json(&lane(&scratch, name, "json"))
+    };
+    let grams = write("grams.json", &original);
+    let kilos_text = original
+        .replace("\"g\"", "\"kg\"")
+        .replace("\"100\"", "\"100000\"")
+        .replace("\"5\"", "\"5000\"")
+        .replace("\"7.5\"", "\"0.0075\"")
+        .replace("\"0.2\"", "\"0.0002\"")
+        .replace("\"0.24\"", "\"0.00024\"");
+    let kilos = write("kilos.json", &kilos_text);
+    let parsed_grade = |row: &Json| {
+        let (n, d) = row
+            .get("cutoff_grade")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .split_once('/')
+            .unwrap();
+        Rat::new(n.parse().unwrap(), d.parse().unwrap()).unwrap()
+    };
+    let payload = |json: Json| json.get("payload").unwrap().clone();
+    let (grams, kilos) = (payload(grams), payload(kilos));
+    assert_ne!(
+        grams.get("source").unwrap().get("sha256"),
+        kilos.get("source").unwrap().get("sha256")
+    );
+    for (g, kg) in grams
+        .get("limiting_cutoffs")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(kilos.get("limiting_cutoffs").unwrap().as_array().unwrap())
+    {
+        assert_eq!(
+            parsed_grade(kg)
+                .checked_mul(Rat::from_integer(1000))
+                .unwrap(),
+            parsed_grade(g)
+        );
+        assert_eq!(g.get("feed_grade_screen"), kg.get("feed_grade_screen"));
+    }
+    let no_band_text = original.replace(
+        ",\n  \"feed_grade_per_dry_tonne\": { \"lower\": \"0.2\", \"upper\": \"0.24\" }",
+        "",
+    );
+    let no_band = payload(write("no-band.json", &no_band_text));
+    assert_eq!(no_band.get("feed_grade_per_dry_tonne"), Some(&Json::Null));
+    for (unit, upper) in [
+        ("g", "1000001"),
+        ("kg", "1001"),
+        ("oz_t", "32151"),
+        ("lb_avdp", "2205"),
+        ("t", "1.0001"),
+    ] {
+        let above_mass = original
+            .replace("\"g\"", &format!("\"{unit}\""))
+            .replace("\"0.24\"", &format!("\"{upper}\""));
+        let refusal = write(&format!("mass-{unit}.json"), &above_mass);
+        assert_eq!(
+            refusal.get("status").unwrap().as_str(),
+            Some("refused"),
+            "{unit}"
+        );
+        assert_eq!(
+            refusal
+                .get("refusal")
+                .unwrap()
+                .get("code")
+                .unwrap()
+                .as_str(),
+            Some("FMINE-REF-109")
+        );
+    }
+    let pure = original
+        .replace("\"g\"", "\"t\"")
+        .replace("\"0.24\"", "\"1\"");
+    assert_eq!(
+        write("pure.json", &pure).get("status").unwrap().as_str(),
+        Some("ok")
+    );
+    for (index, (old, new, code)) in [
+        ("\"0.9\"", "\"1.01\"", "FMINE-REF-109"),
+        ("\"7.5\"", "\"0.6\"", "FMINE-REF-109"),
+        ("\"0.2\"", "\"0.25\"", "FMINE-REF-109"),
+        (
+            "\"dry_metric_tonne\"",
+            "\"wet_metric_tonne\"",
+            "FMINE-REF-105",
+        ),
+        (
+            "\"100_percent_project\"",
+            "\"attributable\"",
+            "FMINE-REF-105",
+        ),
+        (
+            "\"evidence\": \"synthetic\"",
+            "\"evidence\": \"synthetic\", \"evidence\": \"assumed\"",
+            "FMINE-REF-107",
+        ),
+        (
+            "\"price_per_metal_unit\"",
+            "\"price_per_short_ton\"",
+            "FMINE-REF-107",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert!(original.contains(old));
+        let refusal = write(
+            &format!("invalid-{index}.json"),
+            &original.replace(old, new),
+        );
+        assert_eq!(refusal.get("status").unwrap().as_str(), Some("refused"));
+        assert_eq!(refusal.get("payload"), Some(&Json::Null));
+        assert_eq!(
+            refusal
+                .get("refusal")
+                .unwrap()
+                .get("code")
+                .unwrap()
+                .as_str(),
+            Some(code)
+        );
+    }
+}
+
 #[test]
 fn schedule_exports_a_source_bound_certificate_with_the_same_value_scale() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");

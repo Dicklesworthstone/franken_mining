@@ -12,9 +12,9 @@
 //! - `toposort`: multi-period schedules. A feasibility checker (PO-PUSH-5), TopoSort's greedy from a ranking of the
 //!   blocks, and MineLib's CPIT reader (`bd-kcpj`).
 //!
-//! `fmine plan pit` calls `pitflow`; nothing calls `toposort` outside its tests yet. Bienstock–Zuckerberg, local
-//! search and the stochastic layer are later slices.
+//! - `cutoff`: exact Lane limiting grades and a declared feed-grade screen (`BD-252`, plan §15.6).
 
+pub mod cutoff;
 pub mod pitflow;
 pub mod plan_cert;
 pub mod toposort;

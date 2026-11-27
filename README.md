@@ -1425,6 +1425,28 @@ rechecks the flow proof for the scaled closure model before it seals the exact o
 zero optimization gap. The offline verifier checks the sealed frame and, with `--inputs-dir`,
 rehashes the input files. Sampling error, VSS and calibration remain unmeasured.
 
+### Screen feed grade against Lane's limiting cut-offs
+
+DESIGN (BD-252). Compare the same feed-grade band with three break-even grades for one declared
+period. Lane's mine-, mill- and market-limited cases charge period costs differently. The results
+help identify which capacity assumption could change a processing decision.
+
+```bash
+cargo run -p fmine-cli -- plan cutoff \
+  --input tests/planning/lane_cutoff.json --format markdown
+```
+
+The synthetic example uses a 0.20–0.24 g/t feed-grade band. The whole band clears the mine-limited
+grade of **1/5 g/t**, straddles the market-limited grade of **5/23 g/t**, and falls below the mill-limited
+grade of **4/15 g/t**. Equality clears a threshold. Omit the band to get grades alone. JSON and Markdown
+retain the submitted source digest, exact ratios, the metal and currency units, dry metric tonne basis,
+and the 100% project basis. The command refuses a declared feed grade whose contained metal exceeds
+the ore mass.
+
+The model assumes constant recovery and one product. It uses the supplied opportunity cost and capacities
+for the stated period. Balancing cut-offs, grade-dependent recovery, and an operative cut-off policy
+require further evidence.
+
 ### Generate and check production schedules with destination splits
 
 `plan schedule` makes the existing PCPSP scheduling and bound solvers available through the CLI.

@@ -607,6 +607,18 @@ mod tests {
             &["robot", "schema", "all"],
             &["doctor"],
             &["assure", "public", "--synthetic"],
+            &[
+                "plan",
+                "cutoff",
+                "--input",
+                "tests/planning/lane_cutoff.json",
+            ],
+            &[
+                "plan",
+                "cutoff",
+                "--input",
+                "/nonexistent/fmine/lane-cutoff.json",
+            ],
             &["forecast", "record", "check"],
             &[
                 "plant",
@@ -646,7 +658,10 @@ mod tests {
         }
 
         // 3. Validate every compiled verb in VERB_CATALOG against verbs schema (and reject unknown).
-        assert_eq!(VERB_CATALOG.len(), 94);
+        assert_eq!(VERB_CATALOG.len(), 95);
+        assert!(VERB_CATALOG.iter().any(|verb| verb.path == "plan cutoff"
+            && verb.subsystem == "Pushback"
+            && !verb.mutates_authority));
         for path in [
             "forecast journal investigate",
             "forecast journal resolve-investigation",

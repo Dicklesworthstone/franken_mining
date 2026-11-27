@@ -15,6 +15,7 @@ mod guidance_capacity;
 pub mod html;
 mod investment;
 pub mod issued;
+mod lane_cutoff;
 mod lint;
 mod lint_guidance;
 mod lint_html;
@@ -88,6 +89,8 @@ pub enum CliCommand {
     Compare(compare::Command),
     /// A certified ultimate pit from a MineLib pair or explicitly declared OMF model (BD-194/250).
     PlanPit(pit::Command),
+    /// Lane limiting grades for a declared single-product scenario (BD-252).
+    PlanCutoff(PathBuf),
     /// Checked PCPSP production schedule, external destination splits and a verified global bound.
     PlanSchedule(schedule::Command),
     /// Checked OMF period schedules and nested revenue-factor shells under explicit declarations.
@@ -630,6 +633,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                         "--format" | "--workspace" => next += 2,
                         "--json" => next += 1,
                         "schedule" => return "plan schedule",
+                        "cutoff" => return lane_cutoff::VERB,
                         "shells" => return "plan shells",
                         "design" => return "plan design",
                         _ => return "plan pit",
@@ -1262,6 +1266,7 @@ pub fn parse_args(
             | screen_target::VERB
             | "compare"
             | "plan pit"
+            | lane_cutoff::VERB
             | "plan schedule"
             | "plan shells"
             | "plan design"
@@ -1330,6 +1335,18 @@ pub fn parse_args(
             }
             "compare" => CliCommand::Compare(compare::parse(&words)?),
             "plan pit" => CliCommand::PlanPit(pit::parse(&words)?),
+            lane_cutoff::VERB => match words.as_slice() {
+                [plan, cutoff, input, path]
+                    if plan == "plan"
+                        && cutoff == "cutoff"
+                        && input == "--input"
+                        && !path.trim().is_empty()
+                        && !path.starts_with("--") =>
+                {
+                    CliCommand::PlanCutoff(path.into())
+                }
+                _ => return Err(format!("expected 'fmine {}'", lane_cutoff::USAGE)),
+            },
             "plan schedule" if words.iter().any(|word| word == "--omf" || word == "--spec") => {
                 CliCommand::PlanOmf(schedule::omf::parse(&words)?)
             }
@@ -2376,6 +2393,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         CliCommand::CapitalReturn(command) => capital_return::execute(command, workspace_root),
         CliCommand::Compare(command) => compare::execute(command, workspace_root),
         CliCommand::PlanPit(command) => pit::execute(command, workspace_root),
+        CliCommand::PlanCutoff(path) => lane_cutoff::execute(path, workspace_root),
         CliCommand::PlanSchedule(command) => schedule::execute(command, workspace_root),
         CliCommand::PlanOmf(command) => schedule::omf::execute(command, workspace_root),
         CliCommand::Plant(command) => plant::execute(command, workspace_root),
@@ -2756,6 +2774,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 capital_return::USAGE,
                 compare::USAGE,
                 pit::USAGE,
+                lane_cutoff::USAGE,
                 schedule::USAGE,
                 schedule::omf::USAGE,
                 schedule::omf::SHELLS_USAGE,
@@ -2923,6 +2942,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(capital_return::ROBOT_DOCS_JSON);
             payload.push_str(",\"plan_pit\":");
             payload.push_str(pit::ROBOT_DOCS_JSON);
+            payload.push_str(",\"plan_cutoff\":");
+            payload.push_str(lane_cutoff::ROBOT_DOCS_JSON);
             payload.push_str(",\"plan_schedule\":");
             payload.push_str(schedule::ROBOT_DOCS_JSON);
             payload.push_str(",\"plan_schedule_omf\":");

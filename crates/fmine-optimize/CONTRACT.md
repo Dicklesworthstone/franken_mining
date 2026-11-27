@@ -67,9 +67,12 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
 - **Layer:** E
 - **Subsystem:** Pushback
 - **LOC budget:** 36,000 planned / 41,000 ceiling
-- **Allowed Module Families:** `["pitflow", "toposort", "plan_cert"]`
+- **Allowed Module Families:** `["pitflow", "toposort", "plan_cert", "cutoff"]`
 
 ## 2. Inputs
+- `cutoff::LaneInputs` (DESIGN, BD-252, plan §15.6): one period, one metal unit, dry metric tonnes and a
+  common currency on one project basis. All eight economic and capacity quantities are exact rationals.
+  Recovery is constant and recovered metal is sold at the declared net metal price.
 - `toposort::pcpsp::planning::solve`: a parsed PCPSP model, bounded `Options` (0–1,000 search rounds,
   1–4,096 bound steps, 0–9 share decimals), and an optional exact `candidate::SplitSchedule` at that
   scale. It builds a deterministic TopoSort start, improves periods/destinations, and automatically
@@ -211,6 +214,11 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
 - For `toposort::pcpsp`: `parse` as `cpit::parse`; `with_destinations` one destination per block; `greedy` one rank and one first destination per block, and `greedy_from` also one release period per block, each a period of the model; `destinations` and `improve` a schedule and destinations that pass `check` together, one discount factor per period (non-negative and never rising for `improve`), and a cycle limit for `improve`.
 
 ## 3. Outputs
+- `cutoff::LaneCutoffs` returns all three exact limiting grades in contained metal units per dry metric
+  tonne. `screen_grade` compares both ends of a declared grade band with one threshold, including equality
+  on the clearing side. The CLI retains the source digest and basis and labels the scenario uncalibrated.
+  Invalid domains or exact-arithmetic overflow refuse. The pinned symbolic ratios are tested through
+  `fmine plan cutoff`. Balancing cut-offs and operative policy optimization remain open.
 - `PitSolution`: `in_pit` (one flag per block), `value` (the pit's total, the maximum over all closed sets), `pit_size`, `arc_flow` (the certificate, one flow per arc in CSR order) and `stats` (`PitStats`: mergers, splits, relabels, largest label).
 - `verify(problem, in_pit, arc_flow)`: the pit's value if the certificate holds.
 - `NestedShells` provides:

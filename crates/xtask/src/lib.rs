@@ -1652,7 +1652,8 @@ mod tests {
         // BD-350.S5 adds fmine-gen's portable junior drill-release campaign.
         // BD-051 adds the portable investigation ledger and its replay controls.
         // BD-139 adds fmine-derive's portable symbolic golden formula catalog and evaluators.
-        assert_eq!(report.bitwise_files, 136, "{report:?}");
+        // BD-252 adds the exact Lane grades and feed screen in fmine-optimize::cutoff.
+        assert_eq!(report.bitwise_files, 137, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.

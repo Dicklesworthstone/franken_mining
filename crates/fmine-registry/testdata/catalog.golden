@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 94
+[verbs] 95
 decide card
 decide production
 decide investment
@@ -92,6 +92,7 @@ metrics waterfall
 compare
 plan pit
 plan schedule
+plan cutoff
 plan shells
 plan design
 html claims

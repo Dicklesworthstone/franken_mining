@@ -1,0 +1,19 @@
+{
+  "schema": "fmine.lane-cutoff.v1",
+  "period": "Synthetic planning period",
+  "currency": "USD",
+  "metal": "Au",
+  "metal_unit": "g",
+  "ore_mass_basis": "dry_metric_tonne",
+  "ownership_basis": "100_percent_project",
+  "evidence": "synthetic",
+  "price_per_metal_unit": "100",
+  "selling_cost_per_metal_unit": "5",
+  "recovery_fraction": "0.9",
+  "milling_cost_per_dry_tonne": "17.1",
+  "fixed_cost_per_period": "30",
+  "opportunity_cost_per_period": "27",
+  "mill_dry_tonnes_per_period": "10",
+  "market_metal_units_per_period": "7.5",
+  "feed_grade_per_dry_tonne": { "lower": "0.2", "upper": "0.24" }
+}
