@@ -6,9 +6,11 @@
 //! insertion, lab certificate), the checks each must pass alone and their canonical bytes. [`store`] writes them
 //! to a ledger cell, where a correction supersedes the version before it and every version stays readable, and
 //! runs the commit-time law that refuses a record naming one that is not recorded. [`desurvey`] turns a collar and
-//! its survey stations into a minimum-curvature trace.
+//! its survey stations into a minimum-curvature trace. [`join`] finds the overlapping from/to spans of two interval
+//! sets, hole by hole.
 
 pub mod desurvey;
+pub mod join;
 pub mod records;
 pub mod store;
 
