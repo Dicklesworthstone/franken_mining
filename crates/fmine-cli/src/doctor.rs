@@ -339,7 +339,11 @@ fn diagnose_pins(workspace_root: &Path, findings: &mut Vec<String>) -> String {
         } else if line == "name = \"asupersync\"" {
             in_asupersync = true;
         } else if in_asupersync && let Some(rest) = line.strip_prefix("pin = \"") {
-            asupersync_pin = rest.strip_suffix('"').map(ToOwned::to_owned);
+            asupersync_pin = rest
+                .strip_suffix('"')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToOwned::to_owned);
         }
     }
     if foundations == 0 {
@@ -538,7 +542,27 @@ fn diagnose_chains(
                 Ok(v) => {
                     let ok = v.torn_bytes == 0;
                     if ok {
-                        authority_heads.insert(v.cell_id.clone(), Ok(v.record_count));
+                        match authority_heads.get(&v.cell_id) {
+                            None => {
+                                authority_heads.insert(v.cell_id.clone(), Ok(v.record_count));
+                            }
+                            Some(Ok(prev)) if *prev == v.record_count => {}
+                            Some(Ok(prev)) => {
+                                let msg = format!(
+                                    "conflicting segment record counts for {}: {} vs {}",
+                                    v.cell_id, prev, v.record_count
+                                );
+                                findings.push(format!(
+                                    "chain:segment:{}: {msg}",
+                                    raw.display()
+                                ));
+                                authority_heads.insert(v.cell_id.clone(), Err(msg));
+                            }
+                            Some(Err(_)) => {
+                                // Preserve existing unhealthy status for this cell_id; never
+                                // let a second healthy segment mask an unhealthy one.
+                            }
+                        }
                     } else {
                         authority_heads
                             .insert(v.cell_id.clone(), Err(format!("segment status {}", v.status)));
@@ -781,7 +805,15 @@ fn diagnose_runtime(
                         escape_json(&q.name)
                     );
                 };
-                let (ok, status) = match (rho.checked_cmp(unity), rho.checked_cmp(target_rho)) {
+                let (mut ok, mut status) = match (rho.checked_cmp(unity), rho.checked_cmp(target_rho))
+                {
+                    (Err(_), _) | (_, Err(_)) => {
+                        findings.push(format!(
+                            "little_queue:{}: exact utilization comparison overflowed (PO-BED-7)",
+                            q.name
+                        ));
+                        (false, "comparison_overflow")
+                    }
                     (Ok(Ordering::Greater | Ordering::Equal), _) => {
                         findings.push(format!(
                             "little_queue:{}: unstable utilization rho={:.6} >= 1.0 (PO-BED-7)",
@@ -808,15 +840,26 @@ fn diagnose_runtime(
                     }
                     _ => (true, "healthy"),
                 };
-                let implied_wait_s = if q.arrival_rate_per_s.signum() > 0 {
-                    q.mean_occupancy
-                        .checked_div(q.arrival_rate_per_s)
-                        .map_or(0.0, ExactQty::to_f64)
+                let implied_wait_json = if q.arrival_rate_per_s.signum() > 0 {
+                    match q.mean_occupancy.checked_div(q.arrival_rate_per_s) {
+                        Ok(wait) => format!("{:.6}", wait.to_f64()),
+                        Err(_) => {
+                            if ok {
+                                ok = false;
+                                status = "wait_overflow";
+                            }
+                            findings.push(format!(
+                                "little_queue:{}: implied wait L/lambda overflowed",
+                                q.name
+                            ));
+                            "null".to_string()
+                        }
+                    }
                 } else {
-                    0.0
+                    "null".to_string()
                 };
                 format!(
-                    "{{\"name\":\"{}\",\"ok\":{ok},\"status\":\"{status}\",\"lambda_per_s\":{:.6},\"mu_per_s\":{:.6},\"rho\":{:.6},\"rho_ceiling\":0.700000,\"mean_occupancy\":{:.6},\"implied_wait_s\":{implied_wait_s:.6}}}",
+                    "{{\"name\":\"{}\",\"ok\":{ok},\"status\":\"{status}\",\"lambda_per_s\":{:.6},\"mu_per_s\":{:.6},\"rho\":{:.6},\"rho_ceiling\":0.700000,\"mean_occupancy\":{:.6},\"implied_wait_s\":{implied_wait_json}}}",
                     escape_json(&q.name),
                     q.arrival_rate_per_s.to_f64(),
                     q.service_rate_per_s.to_f64(),
