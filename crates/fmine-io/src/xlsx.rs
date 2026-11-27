@@ -621,13 +621,31 @@ fn parse_worksheet_cells(
     quarantined: &mut Vec<QuarantineItem>,
 ) -> Result<BTreeMap<(u32, u32), ExtractedCell>, IoError> {
     let mut cells = BTreeMap::new();
+    // Every cell tag is placed exactly once, including empty ones, so a repeated reference refuses even when
+    // one copy is blank. A cell is never dropped or re-typed silently: a value the reader cannot anchor or
+    // type refuses the workbook with its locator.
+    let mut placed = BTreeSet::new();
+    let mut ordinal = 0_usize;
     let mut pos = 0;
-    while let Some(c_idx) = xml[pos..].find("<c ") {
+    while let Some(c_idx) = find_cell_tag(&xml[pos..]) {
         let abs_c = pos + c_idx;
         let Some(gt) = xml[abs_c..].find('>') else {
             break;
         };
         let open_tag = &xml[abs_c..abs_c + gt + 1];
+        ordinal += 1;
+        let Some((cell_ref, (row, col))) = extract_attr_exact(open_tag, "r")
+            .and_then(|r| parse_a1_ref(&r).map(|coord| (r, coord)))
+        else {
+            return Err(IoError::Xml(format!(
+                "{sheet_name} cell {ordinal}: no usable cell reference"
+            )));
+        };
+        if !placed.insert((row, col)) {
+            return Err(IoError::Xml(format!(
+                "{sheet_name}!{cell_ref}: repeated cell reference"
+            )));
+        }
         if open_tag.ends_with("/>") {
             pos = abs_c + gt + 1;
             continue;
@@ -639,13 +657,7 @@ fn parse_worksheet_cells(
         let c_body = &xml[body_start..body_start + c_close];
         pos = body_start + c_close + 4;
 
-        let Some(cell_ref) = extract_attr(open_tag, "r") else {
-            continue;
-        };
-        let Some((row, col)) = parse_a1_ref(&cell_ref) else {
-            continue;
-        };
-        let cell_type = extract_attr(open_tag, "t").unwrap_or_default();
+        let cell_type = extract_attr_exact(open_tag, "t").unwrap_or_default();
         let style = extract_attr_exact(open_tag, "s")
             .map(|s| {
                 s.parse::<u32>().map_err(|_| {
@@ -679,6 +691,12 @@ fn parse_worksheet_cells(
             "str" | "inlineStr" => {
                 let s = decode_xml_entities(&raw_v);
                 classify_string_cell(sheet_name, &cell_ref, s, quarantined)
+            }
+            // The stored 1 or 0 of a boolean is not a number, and CellValue has no boolean variant.
+            "b" => {
+                return Err(IoError::Xml(format!(
+                    "{sheet_name}!{cell_ref}: boolean cell has no typed value in this reader"
+                )));
             }
             "e" => {
                 let tok = decode_xml_entities(&raw_v);
@@ -727,6 +745,22 @@ fn parse_worksheet_cells(
         );
     }
     Ok(cells)
+}
+
+/// The offset of the next `<c` start tag: the name followed by whitespace, `>` or `/`, so `<col` and `<cfRule`
+/// do not match and a line-wrapped `<c\n r=…>` does.
+fn find_cell_tag(xml: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(at) = xml[from..].find("<c") {
+        let start = from + at;
+        match xml.as_bytes().get(start + 2) {
+            Some(ch) if ch.is_ascii_whitespace() || matches!(ch, b'>' | b'/') => {
+                return Some(start);
+            }
+            _ => from = start + 2,
+        }
+    }
+    None
 }
 
 fn classify_string_cell(
@@ -984,13 +1018,6 @@ pub(crate) fn iter_xml_start_tags<'a>(xml: &'a str, tag_name: &'a str) -> Vec<&'
         }
     }
     out
-}
-
-fn extract_attr(tag: &str, attr_name: &str) -> Option<String> {
-    let pat = format!("{attr_name}=\"");
-    let start = tag.find(&pat)? + pat.len();
-    let end = tag[start..].find('"')? + start;
-    Some(tag[start..end].to_string())
 }
 
 /// The value of attribute `name` in a start tag, matched as a whole name: preceded by whitespace and followed

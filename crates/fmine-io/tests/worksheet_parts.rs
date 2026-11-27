@@ -259,3 +259,49 @@ fn refuses_an_unresolved_shared_string_with_its_cell_locator() {
     let err = Workbook::from_bytes("fixture.xlsx", &bytes).unwrap_err();
     assert!(err.to_string().contains("Production!A1"), "{err}");
 }
+
+fn production_sheet(cells: &str) -> Vec<u8> {
+    let sheet =
+        format!(r#"<worksheet><sheetData><row r="1">{cells}</row></sheetData></worksheet>"#);
+    write_stored_zip(&[
+        ("xl/workbook.xml", WORKBOOK),
+        ("xl/worksheets/sheet1.xml", HIDDEN),
+        ("xl/worksheets/sheet2.xml", sheet.as_bytes()),
+    ])
+}
+
+#[test]
+fn a_cell_the_scanner_cannot_place_or_type_refuses_with_its_locator() {
+    for (cells, locator) in [
+        // Two values for one cell: keeping either one is a guess.
+        (
+            r#"<c r="B1"><v>1</v></c><c r="B1"><v>2</v></c>"#,
+            "Production!B1",
+        ),
+        (
+            r#"<c r="B1" s="0"/><c r="B1"><v>2</v></c>"#,
+            "Production!B1",
+        ),
+        // A boolean's stored 1 is not the number 1.
+        (r#"<c r="B1" t="b"><v>1</v></c>"#, "Production!B1"),
+        (r#"<c r="B1" t='b'><v>1</v></c>"#, "Production!B1"),
+        // A cell with no usable reference cannot be anchored.
+        (r#"<c><v>5</v></c>"#, "Production cell 1"),
+        (r#"<c r="1B"><v>5</v></c>"#, "Production cell 1"),
+    ] {
+        let err = Workbook::from_bytes("fixture.xlsx", &production_sheet(cells)).unwrap_err();
+        assert!(err.to_string().contains(locator), "{cells}: {err}");
+    }
+}
+
+#[test]
+fn a_wrapped_cell_tag_with_single_quoted_reference_is_read() {
+    let book = Workbook::from_bytes(
+        "fixture.xlsx",
+        &production_sheet("<c\n r='B1'\t><v>42</v></c>"),
+    )
+    .unwrap();
+    let cell = book.sheet("Production").unwrap().cell(1, 2).unwrap();
+    assert_eq!(cell.number_text.as_deref(), Some("42"));
+    assert_eq!(book.cell_census().numeric_cells, 1);
+}
