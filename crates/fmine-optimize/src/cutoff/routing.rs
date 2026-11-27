@@ -10,22 +10,31 @@ use super::{Rat, Refusal, RefusalCode, compare, domain};
 pub const MAX_PARCELS: usize = 8;
 pub const MAX_ROUTES: usize = 4;
 pub const MAX_PERIODS: usize = 4;
+pub const MAX_ASSAYS: usize = 3;
 const ZERO: Rat = Rat::from_integer(0);
 const ONE: Rat = Rat::from_integer(1);
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Parcel {
     pub available_dry_tonnes: Rat,
     pub grade_per_dry_tonne: Rat,
-    pub impurity_mass_fraction: Option<Rat>,
+    /// Distinct constituent fractions on the parcel's dry-mass basis, in shared assay order.
+    pub assays: Vec<Rat>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AssayWindow {
+    pub min: Option<Rat>,
+    pub max: Option<Rat>,
+}
+
+#[derive(Clone, Debug)]
 pub struct Route {
     pub dry_tonnes_cap: Rat,
     pub milling_cost_per_dry_tonne: Rat,
     pub energy_budget_kwh: Option<Rat>,
-    pub impurity_ceiling: Option<Rat>,
+    /// One window for each assay coordinate, including unbounded coordinates.
+    pub assay_windows: Vec<AssayWindow>,
 }
 
 /// One physically eligible parcel-to-route pair. Omitted pairs are unavailable.
@@ -79,11 +88,11 @@ pub struct Allocation {
     pub contribution: Rat,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RouteResult {
     pub allocation: Allocation,
     pub energy_used_kwh: Option<Rat>,
-    pub blended_impurity_mass_fraction: Option<Rat>,
+    pub blended_assays: Vec<Option<Rat>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -176,13 +185,16 @@ pub fn solve(scenario: Scenario<'_>) -> Result<Routing, Refusal> {
     .ok_or_else(|| numerical("exact route blend did not return a period"))
 }
 
-fn validate_parcels(parcels: &[Parcel], physical_grade_limit: Rat) -> Result<bool, Refusal> {
+fn validate_parcels(parcels: &[Parcel], physical_grade_limit: Rat) -> Result<usize, Refusal> {
     if !(1..=MAX_PARCELS).contains(&parcels.len()) || physical_grade_limit.signum() <= 0 {
         return Err(domain(
             "route blend requires 1 to 8 parcels and a positive physical grade limit",
         ));
     }
-    let has_assay = parcels.iter().any(|p| p.impurity_mass_fraction.is_some());
+    let assays = parcels[0].assays.len();
+    if assays > MAX_ASSAYS {
+        return Err(domain("at most three assay coordinates are supported"));
+    }
     for p in parcels {
         if !nonnegative([p.available_dry_tonnes, p.grade_per_dry_tonne])
             || compare(p.grade_per_dry_tonne, physical_grade_limit)?.is_gt()
@@ -191,24 +203,28 @@ fn validate_parcels(parcels: &[Parcel], physical_grade_limit: Rat) -> Result<boo
                 "parcel availability and grade must be nonnegative with a physical grade",
             ));
         }
-        if p.impurity_mass_fraction.is_some() != has_assay {
-            return Err(domain(
-                "a declared impurity requires assays on every parcel",
-            ));
+        if p.assays.len() != assays {
+            return Err(domain("each parcel requires the complete shared assays"));
         }
-        if let Some(assay) = p.impurity_mass_fraction {
+        if assays > 0 {
             let metal = p
                 .grade_per_dry_tonne
                 .checked_div(physical_grade_limit)
                 .map_err(|_| arithmetic())?;
-            if !mass_fraction(assay)? || compare(add(assay, metal)?, ONE)?.is_gt() {
+            for &assay in &p.assays {
+                if !mass_fraction(assay)? {
+                    return Err(domain("parcel assays must lie in [0, 1]"));
+                }
+            }
+            let occupied_mass = p.assays.iter().copied().try_fold(metal, add)?;
+            if compare(occupied_mass, ONE)?.is_gt() {
                 return Err(domain(
-                    "parcel impurity and contained metal must fit within dry mass",
+                    "parcel assays and contained metal must fit within dry mass",
                 ));
             }
         }
     }
-    Ok(has_assay)
+    Ok(assays)
 }
 
 struct PeriodModel {
@@ -220,7 +236,7 @@ struct PeriodModel {
 
 fn period_model(
     parcels: &[Parcel],
-    has_assay: bool,
+    assays: usize,
     period: Period<'_>,
 ) -> Result<PeriodModel, Refusal> {
     let Period {
@@ -246,6 +262,7 @@ fn period_model(
         ));
     }
     let mut rhs = Vec::with_capacity(3 * routes.len() + 1);
+    let mut route_rows = Vec::with_capacity(routes.len());
     for route in routes {
         let budget = route.energy_budget_kwh.unwrap_or(ZERO);
         if !nonnegative([
@@ -257,14 +274,24 @@ fn period_model(
                 "route throughput, cost and energy budget must be nonnegative",
             ));
         }
-        if let Some(ceiling) = route.impurity_ceiling
-            && (!has_assay || !mass_fraction(ceiling)?)
-        {
+        if route.assay_windows.len() != assays {
             return Err(domain(
-                "route impurity ceiling requires complete assays and a fraction between zero and one",
+                "route windows must match the shared assay coordinates",
             ));
         }
-        rhs.extend([route.dry_tonnes_cap, budget, ZERO]);
+        let mut bounds = 0;
+        for &AssayWindow { min, max } in &route.assay_windows {
+            let lower = min.unwrap_or(ZERO);
+            let upper = max.unwrap_or(ONE);
+            if !mass_fraction(lower)? || !mass_fraction(upper)? || compare(lower, upper)?.is_gt() {
+                return Err(domain("route assay limits must satisfy 0 ≤ min ≤ max ≤ 1"));
+            }
+            bounds += usize::from(min.is_some()) + usize::from(max.is_some());
+        }
+        route_rows.push(rhs.len());
+        rhs.extend([route.dry_tonnes_cap, budget]);
+        // The zero row preserves the previous tableau order for routes without a bound.
+        rhs.resize(rhs.len() + bounds.max(1), ZERO);
     }
     let market_row = rhs.len();
     rhs.push(market_recovered_metal_cap);
@@ -289,13 +316,19 @@ fn period_model(
             ));
         }
         let recovered = mul(parcel.grade_per_dry_tonne, pair.recovery_fraction)?;
-        let route_row = 3 * pair.route;
+        let route_row = route_rows[pair.route];
         rows[route_row][j] = ONE;
         rows[route_row + 1][j] = energy;
-        if let (Some(assay), Some(ceiling)) =
-            (parcel.impurity_mass_fraction, route.impurity_ceiling)
-        {
-            rows[route_row + 2][j] = sub(assay, ceiling)?;
+        let mut assay_row = route_row + 2;
+        for (&assay, window) in parcel.assays.iter().zip(&route.assay_windows) {
+            if let Some(max) = window.max {
+                rows[assay_row][j] = sub(assay, max)?;
+                assay_row += 1;
+            }
+            if let Some(min) = window.min {
+                rows[assay_row][j] = sub(min, assay)?;
+                assay_row += 1;
+            }
         }
         rows[market_row][j] = recovered;
         let cost = add(
@@ -324,7 +357,7 @@ pub fn solve_horizon(horizon: Horizon<'_>) -> Result<HorizonRouting, Refusal> {
         stockpile_caps_dry_tonnes: caps,
         physical_grade_limit,
     } = horizon;
-    let has_assay = validate_parcels(parcels, physical_grade_limit)?;
+    let assays = validate_parcels(parcels, physical_grade_limit)?;
     if !(1..=MAX_PERIODS).contains(&periods.len())
         || (!caps.is_empty() && caps.len() != parcels.len())
         || !nonnegative(caps.iter().copied().flatten())
@@ -344,7 +377,7 @@ pub fn solve_horizon(horizon: Horizon<'_>) -> Result<HorizonRouting, Refusal> {
                 "declare nonnegative arrivals in shared parcel order and a discount factor in [0, 1]",
             ));
         }
-        models.push(period_model(parcels, has_assay, period)?);
+        models.push(period_model(parcels, assays, period)?);
     }
     let column_parcels: Vec<_> = periods
         .iter()
@@ -443,13 +476,13 @@ fn period_result(
             .map(|route| RouteResult {
                 allocation: Allocation::ZERO,
                 energy_used_kwh: route.energy_budget_kwh.map(|_| ZERO),
-                blended_impurity_mass_fraction: None,
+                blended_assays: vec![None; route.assay_windows.len()],
             })
             .collect(),
         unallocated_dry_tonnes: stock,
         total: Allocation::ZERO,
     };
-    let mut impurity_mass = vec![ZERO; routes.len()];
+    let mut assay_mass = vec![[ZERO; MAX_ASSAYS]; routes.len()];
     for (j, (pair, &amount)) in pairs.iter().zip(values).enumerate() {
         let dry = if idle { ZERO } else { amount };
         let allocation = Allocation {
@@ -469,19 +502,18 @@ fn period_result(
         ) {
             route.energy_used_kwh = Some(add(used, mul(dry, rate)?)?);
         }
-        if let Some(assay) = parcels[pair.parcel].impurity_mass_fraction {
-            impurity_mass[pair.route] = add(impurity_mass[pair.route], mul(dry, assay)?)?;
+        for (mass, &assay) in assay_mass[pair.route]
+            .iter_mut()
+            .zip(&parcels[pair.parcel].assays)
+        {
+            *mass = add(*mass, mul(dry, assay)?)?;
         }
     }
-    if parcels
-        .iter()
-        .any(|parcel| parcel.impurity_mass_fraction.is_some())
-    {
-        for (route, assay_mass) in result.routes.iter_mut().zip(impurity_mass) {
-            let dry = route.allocation.dry_tonnes;
-            if dry.signum() > 0 {
-                route.blended_impurity_mass_fraction =
-                    Some(assay_mass.checked_div(dry).map_err(|_| arithmetic())?);
+    for (route, masses) in result.routes.iter_mut().zip(assay_mass) {
+        let dry = route.allocation.dry_tonnes;
+        if dry.signum() > 0 {
+            for (output, mass) in route.blended_assays.iter_mut().zip(masses) {
+                *output = Some(mass.checked_div(dry).map_err(|_| arithmetic())?);
             }
         }
     }

@@ -1,0 +1,35 @@
+{
+  "schema": "fmine.route-blend.v1",
+  "period": "Synthetic refractory feed",
+  "currency": "USD",
+  "metal": "Au",
+  "metal_unit": "g",
+  "ore_mass_basis": "dry_metric_tonne",
+  "ownership_basis": "100_percent_project",
+  "evidence": "synthetic",
+  "price_per_metal_unit": "100",
+  "selling_cost_per_metal_unit": "0",
+  "market_recovered_metal_cap": "6",
+  "analytes": ["sulphide-sulphur", "arsenic"],
+  "parcels": [
+    { "id": "rich", "available_dry_tonnes": "3", "grade_per_dry_tonne": "2", "assays": { "sulphide-sulphur": "0.01", "arsenic": "0.03" } },
+    { "id": "sulphide", "available_dry_tonnes": "3", "grade_per_dry_tonne": "1", "assays": { "sulphide-sulphur": "0.05", "arsenic": "0.01" } },
+    { "id": "diluent", "available_dry_tonnes": "3", "grade_per_dry_tonne": "0", "assays": { "sulphide-sulphur": "0", "arsenic": "0" } }
+  ],
+  "routes": [
+    {
+      "id": "roaster",
+      "dry_tonnes_cap": "3",
+      "milling_cost_per_dry_tonne": "20",
+      "assay_windows": {
+        "sulphide-sulphur": { "min": "0.025", "max": "0.03" },
+        "arsenic": { "max": "0.015" }
+      },
+      "pairs": [
+        { "parcel": "rich", "recovery_fraction": "1", "haul_cost_per_dry_tonne": "0" },
+        { "parcel": "sulphide", "recovery_fraction": "1", "haul_cost_per_dry_tonne": "0" },
+        { "parcel": "diluent", "recovery_fraction": "1", "haul_cost_per_dry_tonne": "0" }
+      ]
+    }
+  ]
+}

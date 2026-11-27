@@ -1635,6 +1635,24 @@ options. In the [package worksheet](tests/planning/route_blend_capacity_packages
 and more offtake each add zero contribution on their own. Together they shift a tonne into week two
 and add **USD 62** in discounted contribution, or **USD 37** after the USD 25 package quote.
 
+### Route ore within named assay limits
+
+Declare up to three distinct constituents in `analytes`, then supply each parcel's dry-mass
+fractions in `assays`. For each route, `assay_windows` can set an inclusive minimum, maximum
+or both for each constituent. The report shows the achieved blend and each supplied bound.
+An idle route has no blend assay. Both the single-period and horizon worksheets accept this form.
+
+```bash
+cargo run -p fmine-cli -- plan blend \
+  --input tests/planning/route_blend_assay_windows.json --format markdown
+```
+
+The synthetic roaster blends sulphide-rich feed with higher-grade feed and diluent.
+The result reaches the **3% sulphide-sulphur** and **1.5% arsenic** upper bounds. When
+there is only a **3% sulphide-sulphur minimum**, the optimum uses equal quantities
+of the sulphide-rich and higher-grade feed. Assays apply to the supplied dry-mass basis,
+with fixed parcel grades and additive constituent mass.
+
 ### Generate and check production schedules with destination splits
 
 `plan schedule` makes the existing PCPSP scheduling and bound solvers available through the CLI.

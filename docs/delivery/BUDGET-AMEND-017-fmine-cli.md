@@ -23,6 +23,7 @@
 - Includes source-bound multi-period routing with exact stockpile balances and close caps (bd-o8xm).
 - Includes exact finite capacity-option comparisons in the same routing worksheet (bd-wykr).
 - Includes quoted packages of jointly binding capacity increases in the same worksheet (bd-oysh).
+- Includes exact two-sided limits on named constituents in the ore-routing worksheet (bd-h6g6).
 - Includes the source-bound acQuire desurvey command, explicit random/systematic survey errors and direct CSV/XLSX command controls (BD-188, plan §12.2), under the standing owner waiver below.
 - Includes source-bound domain compositing and CRM batch scoring with native command controls (BD-166, BD-167, BD-188, BD-282), under the same standing owner waiver.
 - **Gate served:** The measured `check-amend` in `GATE-LAYERS-00` reads this approval as the scoped allowance. The registry uses the plan's 1,192,000-line aggregate.

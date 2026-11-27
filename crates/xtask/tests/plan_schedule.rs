@@ -30,6 +30,190 @@ fn binary() -> PathBuf {
 }
 
 #[test]
+fn plan_blend_enforces_exact_two_sided_named_assay_windows() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let input = std::path::Path::new("tests/planning/route_blend_assay_windows.json");
+    let original = std::fs::read_to_string(root.join(input)).unwrap();
+    let output = blend(&root, input, "json");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(blend(&root, input, "json").stdout, output.stdout);
+    let envelope = blend_envelope(&output);
+    let payload = envelope.get("payload").unwrap();
+    expect(
+        payload.get("source").unwrap(),
+        "sha256",
+        &sha256(original.as_bytes()).to_hex(),
+    );
+    expect(
+        payload.get("total").unwrap(),
+        "incremental_contribution",
+        "2055/7",
+    );
+    let allocations = payload.get("allocations").unwrap().as_array().unwrap();
+    for (allocation, mass) in allocations.iter().zip(["27/28", "45/28", "3/7"]) {
+        expect(allocation, "dry_tonnes", mass);
+    }
+    assert_eq!(allocations.len(), 3);
+    let assays = payload.get("routes").unwrap().as_array().unwrap()[0]
+        .get("assays")
+        .unwrap();
+    let assays = assays.as_array().unwrap();
+    expect(&assays[0], "analyte", "sulphide-sulphur");
+    expect(&assays[0], "blended_mass_fraction", "3/100");
+    expect(&assays[0], "min_mass_fraction", "1/40");
+    expect(&assays[0], "max_mass_fraction", "3/100");
+    expect(&assays[1], "analyte", "arsenic");
+    expect(&assays[1], "blended_mass_fraction", "3/200");
+    expect(&assays[1], "max_mass_fraction", "3/200");
+    assert_eq!(assays[1].get("min_mass_fraction"), Some(&Json::Null));
+    let markdown = blend(&root, input, "markdown");
+    assert!(markdown.status.success());
+    assert!(
+        String::from_utf8(markdown.stdout)
+            .unwrap()
+            .contains("| roaster | sulphide-sulphur | 3/100 | 1/40 | 3/100 |")
+    );
+
+    let scratch = std::env::temp_dir().join(format!("fmine-assay-windows-{}", std::process::id()));
+    std::fs::create_dir(&scratch).unwrap();
+    let submit = |name: &str, worksheet: &str| {
+        let path = scratch.join(name);
+        std::fs::write(&path, worksheet).unwrap();
+        blend_envelope(&blend(&root, &path, "json"))
+    };
+    let window = r#"{ "min": "0.025", "max": "0.03" }"#;
+    let floor_only = original
+        .replace(window, r#"{ "min": "0.03" }"#)
+        .replace(r#""max": "0.015""#, r#""max": "1""#);
+    let report = submit("floor.json", &floor_only);
+    let payload = report.get("payload").unwrap();
+    expect(
+        payload.get("total").unwrap(),
+        "incremental_contribution",
+        "390/1",
+    );
+    let allocations = payload.get("allocations").unwrap().as_array().unwrap();
+    for (allocation, mass) in allocations.iter().zip(["3/2", "3/2", "0/1"]) {
+        expect(allocation, "dry_tonnes", mass);
+    }
+    let idle = submit(
+        "idle.json",
+        &original.replace(window, r#"{ "min": "0.06", "max": "0.07" }"#),
+    );
+    let payload = idle.get("payload").unwrap();
+    expect(payload.get("total").unwrap(), "dry_tonnes", "0/1");
+    let assays = payload.get("routes").unwrap().as_array().unwrap()[0]
+        .get("assays")
+        .unwrap();
+    for row in assays.as_array().unwrap() {
+        assert_eq!(row.get("blended_mass_fraction"), Some(&Json::Null));
+    }
+    let three = original
+        .replace(
+            r#"["sulphide-sulphur", "arsenic"]"#,
+            r#"["sulphide-sulphur", "arsenic", "carbon"]"#,
+        )
+        .replace(
+            r#""arsenic": "0.03""#,
+            r#""arsenic": "0.03", "carbon": "0.01""#,
+        )
+        .replace(
+            r#""arsenic": "0.01""#,
+            r#""arsenic": "0.01", "carbon": "0.01""#,
+        )
+        .replace(r#""arsenic": "0""#, r#""arsenic": "0", "carbon": "0.01""#);
+    let report = submit("three_assays.json", &three);
+    let payload = report.get("payload").unwrap();
+    let assays = payload.get("routes").unwrap().as_array().unwrap()[0]
+        .get("assays")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(assays.len(), 3);
+    expect(&assays[2], "analyte", "carbon");
+    expect(&assays[2], "blended_mass_fraction", "1/100");
+    assert_eq!(assays[2].get("max_mass_fraction"), Some(&Json::Null));
+
+    let (_, data) = original.split_once(r#""parcels": "#).unwrap();
+    let (parcels, routes) = data.split_once(",\n  \"routes\": ").unwrap();
+    let routes = routes.trim().strip_suffix('}').unwrap().trim();
+    let horizon = format!(
+        r#"{{
+        "schema":"fmine.route-blend-horizon.v1","currency":"USD","metal":"Au","metal_unit":"g",
+        "ore_mass_basis":"dry_metric_tonne","ownership_basis":"100_percent_project","evidence":"synthetic",
+        "analytes":["sulphide-sulphur","arsenic"],"parcels":{parcels},
+        "periods":[{{"id":"p1","discount_factor":"0.5","arrivals":[],"price_per_metal_unit":"100",
+            "selling_cost_per_metal_unit":"0","market_recovered_metal_cap":"6","routes":{routes}}}],
+        "capacity_options":[{{"id":"larger-roaster","kind":"route_throughput","period":"p1",
+            "route":"roaster","increase":"1","present_value_cost":"25"}}]
+    }}"#
+    );
+    let report = submit("horizon.json", &horizon);
+    let payload = report.get("payload").unwrap();
+    expect(
+        payload.get("total").unwrap(),
+        "discounted_contribution",
+        "2055/14",
+    );
+    let options = payload
+        .get("capacity_comparison")
+        .unwrap()
+        .get("options")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    expect(&options[0], "net_present_value_improvement", "335/14");
+
+    for (name, from, to, code) in [
+        (
+            "missing.json",
+            r#", "arsenic": "0.03""#,
+            "",
+            "FMINE-REF-107",
+        ),
+        (
+            "unknown.json",
+            r#""arsenic": { "max": "0.015" }"#,
+            r#""tin": { "max": "0.015" }"#,
+            "FMINE-REF-107",
+        ),
+        (
+            "inverted.json",
+            window,
+            r#"{ "min": "0.04", "max": "0.03" }"#,
+            "FMINE-REF-109",
+        ),
+        (
+            "mixed.json",
+            r#""analytes":"#,
+            r#""impurity":"As","analytes":"#,
+            "FMINE-REF-107",
+        ),
+        (
+            "duplicate.json",
+            r#""sulphide-sulphur", "arsenic""#,
+            r#""arsenic", "ARSENIC""#,
+            "FMINE-REF-107",
+        ),
+        (
+            "mass.json",
+            r#""sulphide-sulphur": "0.01", "arsenic": "0.03""#,
+            r#""sulphide-sulphur": "0.9", "arsenic": "0.2""#,
+            "FMINE-REF-109",
+        ),
+    ] {
+        assert!(original.contains(from));
+        let refused = submit(name, &original.replace(from, to));
+        assert_eq!(refused.get("payload"), Some(&Json::Null));
+        expect(refused.get("refusal").unwrap(), "code", code);
+    }
+}
+
+#[test]
 fn split_candidates_and_global_bounds_match_independent_enumeration() {
     let output = Command::new("python3")
         .arg("-I")

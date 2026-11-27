@@ -256,6 +256,12 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
   contribution. A zero optimum prefers idle when permitted by the declared caps. Grades and assays remain
   fixed for each parcel. The horizon takes arrivals as inputs and does not plan mining or model interactions
   among stockpiled parcels.
+- Named assay windows (DESIGN, BD-252 §15.6, bd-h6g6) share up to three dry-mass
+  constituent coordinates across parcels. Each route can bound each blended fraction
+  above, below or on both sides, with independently exact rows. The optimizer
+  checks complete assay support and the joint constituent and recovered-metal mass
+  budget per parcel. Positive feed returns dry-mass-weighted fractions in the
+  submitted order. Idle routes have undefined blended fractions.
 - `PitSolution`: `in_pit` (one flag per block), `value` (the pit's total, the maximum over all closed sets), `pit_size`, `arc_flow` (the certificate, one flow per arc in CSR order) and `stats` (`PitStats`: mergers, splits, relabels, largest label).
 - `verify(problem, in_pit, arc_flow)`: the pit's value if the certificate holds.
 - `NestedShells` provides:

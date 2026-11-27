@@ -11,8 +11,8 @@ use fmine_core::anchor::SourceAnchor;
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_io::omf::json::{self, Json};
 use fmine_optimize::cutoff::routing::{
-    self, Allocation, Horizon, MAX_PARCELS, MAX_PERIODS, MAX_ROUTES, Parcel, Period, Route,
-    RoutePair, Routing, Scenario,
+    self, Allocation, AssayWindow, Horizon, MAX_ASSAYS, MAX_PARCELS, MAX_PERIODS, MAX_ROUTES,
+    Parcel, Period, Route, RoutePair, Routing, Scenario,
 };
 use fmine_units::ExactQty;
 
@@ -38,6 +38,7 @@ pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     r#""parcels":"1 to 8 with unique id, available_dry_tonnes and grade_per_dry_tonne. An optional common impurity element requires impurity_mass_fraction for every parcel.","#,
     r#""routes":"1 to 4 with unique id, dry_tonnes_cap, milling_cost_per_dry_tonne, optional energy_budget_kwh and impurity_ceiling. The pairs list contains only eligible parcels, with parcel id, recovery_fraction and haul_cost_per_dry_tonne. An energy budget requires specific_energy_kwh_per_dry_tonne for every eligible pair on that route.","#,
     r#""market":"One shared market_recovered_metal_cap, price_per_metal_unit and selling_cost_per_metal_unit. Objective is recovered metal at net price less milling and haul costs. Idle feed is feasible.","#,
+    r#""assay_windows":{"example":"tests/planning/route_blend_assay_windows.json","declaration":"Optional analytes array of one to three distinct constituents. Each parcel supplies every named dry-mass fraction in assays. Each route may declare assay_windows keyed by name, with min, max, or both as exact decimal mass fractions. Use this form in either schema. It is exclusive with the single-impurity fields."},"#,
     r#""horizon":{"schema":"fmine.route-blend-horizon.v1","example":"tests/planning/route_blend_horizon.json","periods":"Replace the root period, market, price, selling and routes fields with an ordered periods array, containing up to four objects with id, discount_factor in [0,1], arrivals (parcel and dry_tonnes rows), routes and the market and economic fields. Each parcel can declare stockpile_cap_dry_tonnes. Closing stock carries on the same parcel and basis; caps apply at each close.", "#,
     r#""capacity_options":{"example":"tests/planning/route_blend_capacity_options.json","declaration":"Optional array of 1 to 8 independent options, each with unique id, kind, positive increase and nonnegative present_value_cost in the worksheet currency. Use period and route for route_throughput (dry metric tonnes) or route_energy (kWh), period for market (recovered metal unit), or parcel for stockpile (dry metric tonnes at every period close). Energy and stockpile increases require a declared finite base cap. All options compare against the same feasible baseline.", "#,
     r#""package_example":"tests/planning/route_blend_capacity_packages.json","packages":"Use an option with only id, present_value_cost and a changes array of two to four distinct cap targets. Each change supplies kind, increase and its target fields. All changes enter one reoptimization and the quoted package cost is charged once."}}}"#,
@@ -69,12 +70,16 @@ fn field<'a>(value: &'a Json, key: &str) -> Result<&'a str, Refusal> {
 
 fn label<'a>(value: &'a Json, key: &str) -> Result<&'a str, Refusal> {
     let text = field(value, key)?;
-    if text.trim().is_empty() || text.len() > 128 || text.chars().any(char::is_control) {
+    if !valid_label(text) {
         return Err(declaration(format!(
             "{key} requires a nonempty printable label of at most 128 bytes"
         )));
     }
     Ok(text)
+}
+
+fn valid_label(text: &str) -> bool {
+    !text.trim().is_empty() && text.len() <= 128 && !text.chars().any(char::is_control)
 }
 
 fn quantity(value: &Json, key: &str) -> Result<ExactQty, Refusal> {
@@ -151,13 +156,14 @@ struct Report<'a> {
     unit: &'a str,
     evidence: &'a str,
     impurity: Option<&'a str>,
+    assay_names: &'a [&'a str],
     source: &'a SourceAnchor,
     bytes: usize,
 }
 
 impl Report<'_> {
     fn basis_json(&self) -> String {
-        format!(
+        let mut basis = format!(
             "\"currency\":{},\"metal\":{},\"metal_unit\":{},\"ore_mass_basis\":\"dry_metric_tonne\",\"ownership_basis\":\"100_percent_project\",\"input_evidence\":{},\"calibration\":\"uncalibrated\",\"impurity\":{},\"source\":{}",
             js(self.currency),
             js(self.metal),
@@ -165,8 +171,130 @@ impl Report<'_> {
             js(self.evidence),
             self.impurity.map_or_else(|| "null".into(), js),
             worksheet_input::source_json(self.source, self.bytes)
-        )
+        );
+        if self.named_assays() {
+            let names = self
+                .assay_names
+                .iter()
+                .map(|name| js(name))
+                .collect::<Vec<_>>()
+                .join(",");
+            let _ = write!(basis, ",\"analytes\":[{names}]");
+        }
+        basis
     }
+
+    fn named_assays(&self) -> bool {
+        self.impurity.is_none() && !self.assay_names.is_empty()
+    }
+}
+
+fn assay_names<'a>(
+    doc: &'a Json,
+    metal: &str,
+    impurity: Option<&'a str>,
+) -> Result<Vec<&'a str>, Refusal> {
+    if doc.get("analytes").is_none() {
+        return Ok(impurity.into_iter().collect());
+    }
+    if impurity.is_some() {
+        return Err(declaration("use analytes or impurity for the worksheet"));
+    }
+    let names = rows(doc, "analytes", MAX_ASSAYS)?;
+    if names.is_empty() {
+        return Err(declaration("analytes requires at least one constituent"));
+    }
+    let mut seen = BTreeSet::from([metal.to_lowercase()]);
+    names
+        .iter()
+        .map(|value| {
+            let name = value
+                .as_str()
+                .filter(|text| valid_label(text))
+                .ok_or_else(|| declaration("analytes requires printable constituent names"))?;
+            if !seen.insert(name.to_lowercase()) {
+                return Err(declaration(format!(
+                    "duplicate or recovered-metal constituent {name}"
+                )));
+            }
+            Ok(name)
+        })
+        .collect()
+}
+
+fn read_assays(row: &Json, report: &Report<'_>) -> Result<Vec<ExactQty>, Refusal> {
+    if report.named_assays() {
+        if row.get("impurity_mass_fraction").is_some() {
+            return Err(declaration("named assays exclude impurity_mass_fraction"));
+        }
+        let assays = row
+            .get("assays")
+            .ok_or_else(|| declaration("each parcel requires the named assays"))?;
+        object(assays, report.assay_names)?;
+        return report
+            .assay_names
+            .iter()
+            .map(|name| quantity(assays, name))
+            .collect();
+    }
+    if row.get("assays").is_some() {
+        return Err(declaration(
+            "parcel assays require the analytes declaration",
+        ));
+    }
+    let assay = optional(row, "impurity_mass_fraction")?;
+    if assay.is_some() != report.impurity.is_some() {
+        return Err(declaration(
+            "declare an impurity assay for every parcel when an impurity is named",
+        ));
+    }
+    Ok(assay.into_iter().collect())
+}
+
+fn route_windows(row: &Json, report: &Report<'_>) -> Result<Vec<AssayWindow>, Refusal> {
+    if report.named_assays() {
+        if row.get("impurity_ceiling").is_some() {
+            return Err(declaration("named assays exclude impurity_ceiling"));
+        }
+        let Some(windows) = row.get("assay_windows") else {
+            return Ok(vec![AssayWindow::default(); report.assay_names.len()]);
+        };
+        object(windows, report.assay_names)?;
+        return report
+            .assay_names
+            .iter()
+            .map(|name| {
+                let Some(window) = windows.get(name) else {
+                    return Ok(AssayWindow::default());
+                };
+                object(window, &["min", "max"])?;
+                let min = optional(window, "min")?;
+                let max = optional(window, "max")?;
+                if min.is_none() && max.is_none() {
+                    return Err(declaration(format!(
+                        "assay window for {name} requires a min or max"
+                    )));
+                }
+                Ok(AssayWindow { min, max })
+            })
+            .collect();
+    }
+    if row.get("assay_windows").is_some() {
+        return Err(declaration(
+            "assay_windows requires the analytes declaration",
+        ));
+    }
+    let max = optional(row, "impurity_ceiling")?;
+    if report.impurity.is_some() {
+        return Ok(vec![AssayWindow { min: None, max }]);
+    }
+    if max.is_some() {
+        return Err(Refusal::new(
+            RefusalCode::OutsidePhysicalDomain109,
+            "route impurity ceiling requires the common impurity assay",
+        ));
+    }
+    Ok(Vec::new())
 }
 
 fn evaluate(text: &str, source: &SourceAnchor) -> Result<Envelope, Refusal> {
@@ -183,6 +311,7 @@ fn evaluate(text: &str, source: &SourceAnchor) -> Result<Envelope, Refusal> {
             "ownership_basis",
             "evidence",
             "impurity",
+            "analytes",
             "market_recovered_metal_cap",
             "price_per_metal_unit",
             "selling_cost_per_metal_unit",
@@ -249,6 +378,17 @@ fn evaluate(text: &str, source: &SourceAnchor) -> Result<Envelope, Refusal> {
     if impurity == Some(metal) {
         return Err(declaration("impurity must differ from the recovered metal"));
     }
+    let names = assay_names(&doc, metal, impurity)?;
+    let report = Report {
+        currency,
+        metal,
+        unit,
+        evidence,
+        impurity,
+        assay_names: &names,
+        source,
+        bytes: text.len(),
+    };
     let parcel_rows = rows(&doc, "parcels", MAX_PARCELS)?;
     let mut parcel_index = BTreeMap::new();
     let mut parcels = Vec::new();
@@ -262,6 +402,7 @@ fn evaluate(text: &str, source: &SourceAnchor) -> Result<Envelope, Refusal> {
                 "available_dry_tonnes",
                 "grade_per_dry_tonne",
                 "impurity_mass_fraction",
+                "assays",
                 "stockpile_cap_dry_tonnes",
             ],
         )?;
@@ -269,16 +410,10 @@ fn evaluate(text: &str, source: &SourceAnchor) -> Result<Envelope, Refusal> {
         if parcel_index.insert(id, parcels.len()).is_some() {
             return Err(declaration(format!("duplicate parcel {id}")));
         }
-        let assay = optional(row, "impurity_mass_fraction")?;
-        if assay.is_some() != impurity.is_some() {
-            return Err(declaration(
-                "declare an impurity assay for every parcel when an impurity is named",
-            ));
-        }
         parcels.push(Parcel {
             available_dry_tonnes: quantity(row, "available_dry_tonnes")?,
             grade_per_dry_tonne: quantity(row, "grade_per_dry_tonne")?,
-            impurity_mass_fraction: assay,
+            assays: read_assays(row, &report)?,
         });
         let cap = optional(row, "stockpile_cap_dry_tonnes")?;
         if cap.is_some() && !horizon {
@@ -287,15 +422,6 @@ fn evaluate(text: &str, source: &SourceAnchor) -> Result<Envelope, Refusal> {
         caps.push(cap);
         parcel_ids.push(id);
     }
-    let report = Report {
-        currency,
-        metal,
-        unit,
-        evidence,
-        impurity,
-        source,
-        bytes: text.len(),
-    };
     let physical_grade_limit = feed_mass_limit(unit)?;
     if horizon {
         let mut period_ids = BTreeSet::new();
@@ -317,7 +443,7 @@ fn evaluate(text: &str, source: &SourceAnchor) -> Result<Envelope, Refusal> {
             if !period_ids.insert(id) {
                 return Err(declaration(format!("duplicate period {id}")));
             }
-            periods.push(read_period(row, id, &parcel_index, true)?);
+            periods.push(read_period(row, id, &parcel_index, true, &report)?);
         }
         let models: Vec<_> = periods.iter().map(DeclaredPeriod::model).collect();
         let horizon = Horizon {
@@ -350,7 +476,7 @@ fn evaluate(text: &str, source: &SourceAnchor) -> Result<Envelope, Refusal> {
         );
     }
 
-    let period = read_period(&doc, label(&doc, "period")?, &parcel_index, false)?;
+    let period = read_period(&doc, label(&doc, "period")?, &parcel_index, false, &report)?;
     let result = routing::solve(Scenario {
         parcels: &parcels,
         routes: &period.routes,
@@ -368,6 +494,7 @@ fn read_period<'a>(
     id: &'a str,
     parcel_index: &BTreeMap<&str, usize>,
     horizon: bool,
+    report: &Report<'_>,
 ) -> Result<DeclaredPeriod<'a>, Refusal> {
     let mut route_ids = Vec::new();
     let mut route_names = BTreeSet::new();
@@ -382,6 +509,7 @@ fn read_period<'a>(
                 "milling_cost_per_dry_tonne",
                 "energy_budget_kwh",
                 "impurity_ceiling",
+                "assay_windows",
                 "pairs",
             ],
         )?;
@@ -395,7 +523,7 @@ fn read_period<'a>(
             dry_tonnes_cap: quantity(row, "dry_tonnes_cap")?,
             milling_cost_per_dry_tonne: quantity(row, "milling_cost_per_dry_tonne")?,
             energy_budget_kwh: optional(row, "energy_budget_kwh")?,
-            impurity_ceiling: optional(row, "impurity_ceiling")?,
+            assay_windows: route_windows(row, report)?,
         });
         for entry in rows(row, "pairs", MAX_PARCELS)? {
             object(
@@ -545,27 +673,66 @@ fn tables(
             allocation(selected)
         ));
     }
-    let assay_title = impurity.map_or_else(|| "Impurity".into(), markdown_cell);
-    let _ = writeln!(
-        markdown,
-        "\n| Destination | Dry tonnes used / cap | Grinding kWh used / cap | {assay_title} fraction / cap |\n|---|---:|---:|---:|"
-    );
+    let named = report.named_assays();
+    let mut assay_table = String::new();
+    if named {
+        markdown.push_str("\n| Destination | Dry tonnes used / cap | Grinding kWh used / cap |\n|---|---:|---:|\n");
+        assay_table.push_str("\n| Destination | Constituent | Blended dry-mass fraction | Minimum | Maximum |\n|---|---|---:|---:|---:|\n");
+    } else {
+        let assay_title = impurity.map_or_else(|| "Impurity".into(), markdown_cell);
+        let _ = writeln!(
+            markdown,
+            "\n| Destination | Dry tonnes used / cap | Grinding kWh used / cap | {assay_title} fraction / cap |\n|---|---:|---:|---:|"
+        );
+    }
     let mut route_results = Vec::new();
     let cell = |quantity: Option<ExactQty>| quantity.map_or_else(|| "—".into(), exact);
     for ((&id, route), total) in route_ids.iter().zip(routes).zip(&result.routes) {
+        let blended = total.blended_assays.first().copied().flatten();
+        let ceiling = route.assay_windows.first().and_then(|window| window.max);
+        let mut legacy_cell = String::new();
+        let assay_json = if named {
+            let mut assays = Vec::new();
+            for ((&name, &value), &window) in report
+                .assay_names
+                .iter()
+                .zip(&total.blended_assays)
+                .zip(&route.assay_windows)
+            {
+                let _ = writeln!(
+                    assay_table,
+                    "| {} | {} | {} | {} | {} |",
+                    markdown_cell(id),
+                    markdown_cell(name),
+                    cell(value),
+                    cell(window.min),
+                    cell(window.max)
+                );
+                assays.push(format!(
+                    "{{\"analyte\":{},\"blended_mass_fraction\":{},\"min_mass_fraction\":{},\"max_mass_fraction\":{}}}",
+                    js(name), maybe(value), maybe(window.min), maybe(window.max)));
+            }
+            format!("\"assays\":[{}]", assays.join(","))
+        } else {
+            let _ = write!(legacy_cell, " {} / {} |", cell(blended), cell(ceiling));
+            format!(
+                "\"blended_impurity_mass_fraction\":{},\"impurity_ceiling\":{}",
+                maybe(blended),
+                maybe(ceiling)
+            )
+        };
         let _ = writeln!(
             markdown,
-            "| {} | {} / {} | {} / {} | {} / {} |",
+            "| {} | {} / {} | {} / {} |{legacy_cell}",
             markdown_cell(id),
             exact(total.allocation.dry_tonnes),
             exact(route.dry_tonnes_cap),
             cell(total.energy_used_kwh),
             cell(route.energy_budget_kwh),
-            cell(total.blended_impurity_mass_fraction),
-            cell(route.impurity_ceiling)
         );
-        route_results.push(format!("{{\"route\":{},{},\"dry_tonnes_cap\":{},\"energy_used_kwh\":{},\"energy_budget_kwh\":{},\"blended_impurity_mass_fraction\":{},\"impurity_ceiling\":{}}}", js(id), allocation(total.allocation), q(route.dry_tonnes_cap), maybe(total.energy_used_kwh), maybe(route.energy_budget_kwh), maybe(total.blended_impurity_mass_fraction), maybe(route.impurity_ceiling)));
+        route_results.push(format!("{{\"route\":{},{},\"dry_tonnes_cap\":{},\"energy_used_kwh\":{},\"energy_budget_kwh\":{},{assay_json}}}", js(id), allocation(total.allocation), q(route.dry_tonnes_cap), maybe(total.energy_used_kwh), maybe(route.energy_budget_kwh)));
     }
+    markdown.push_str(&assay_table);
     (allocations.join(","), route_results.join(","))
 }
 
