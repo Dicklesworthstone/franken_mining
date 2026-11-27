@@ -1,7 +1,7 @@
 # CONTRACT.md — `fmine-lab`
 
 ## 1. Purpose
-Testpit `S1` deterministic virtual-time simulation harness, Dynamic Partial-Order Reduction (DPOR) schedule explorer, chaos fault-injection + `CrashPack` replayer, runtime capability-mask auditor (`PO-BED-8`), and scheduler/diagnostic invariance harness (`INT-AS-001` criterion 8) (`BD-099`, `BD-100`, `BD-097`, `BD-337`, plan §26.6–§26.7 & §34.2).
+Testpit `S1` deterministic virtual-time simulation harness, Dynamic Partial-Order Reduction (DPOR) schedule explorer, chaos fault-injection + `CrashPack` replayer, runtime capability-mask auditor (`PO-BED-8`), Bedrock FM protocol oracles (`PO-BED-1`, `2`, `3`, `4`, `10`), and scheduler/diagnostic invariance harness (`INT-AS-001` criterion 8) (`BD-099`, `BD-100`, `BD-101`, `BD-097`, `BD-337`, plan §26.6–§26.7 & §34.2).
 
 - **Crate:** `fmine-lab`
 - **Layer:** S1
@@ -51,7 +51,7 @@ Verification/lab evidence only (Testpit); never production operational measureme
 
 ## 10. Known gaps
 - `asupersync` native `LabRuntime` adapter awaits `asupersync =0.5.0` admission into `Cargo.lock` (`INT-AS-001a` / `BD-325`).
-- FM oracles (`PO-BED-1`, `2`, `3`, `4`, `10`, `BD-101`) build atop this crate next.
+- 1,000-seed partition and crash chaos campaign wiring all FM oracles against live `fmine-sync` replicas belongs to `GATE-SYNC-01` (`BD-109`).
 
 ## 11. Public API
 - `LabError`

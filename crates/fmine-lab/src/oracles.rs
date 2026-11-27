@@ -81,6 +81,16 @@ pub fn check_po_bed_1_single_writer(events: &[LeaseEvent]) -> Vec<OracleViolatio
                 epoch,
                 holder_id,
             } => {
+                if cell_id.trim().is_empty() || holder_id.trim().is_empty() {
+                    violations.push(OracleViolation {
+                        obligation: ProofObligation::PoBed1SingleWriter,
+                        event_index: idx,
+                        detail: format!(
+                            "blank cell_id ('{cell_id}') or holder_id ('{holder_id}') in GrantLease"
+                        ),
+                    });
+                    continue;
+                }
                 if *epoch == 0 {
                     violations.push(OracleViolation {
                         obligation: ProofObligation::PoBed1SingleWriter,
@@ -88,6 +98,16 @@ pub fn check_po_bed_1_single_writer(events: &[LeaseEvent]) -> Vec<OracleViolatio
                         detail: format!("cell '{cell_id}': epoch 0 lease granted to '{holder_id}'"),
                     });
                     continue;
+                }
+                let cur_max = max_epoch.get(cell_id).copied().unwrap_or(0);
+                if *epoch < cur_max {
+                    violations.push(OracleViolation {
+                        obligation: ProofObligation::PoBed1SingleWriter,
+                        event_index: idx,
+                        detail: format!(
+                            "cell '{cell_id}': regressed lease epoch {epoch} < {cur_max} granted to '{holder_id}'"
+                        ),
+                    });
                 }
                 if let Some(prev) = holders.get(&(cell_id.clone(), *epoch)) {
                     if prev != holder_id {
@@ -102,9 +122,8 @@ pub fn check_po_bed_1_single_writer(events: &[LeaseEvent]) -> Vec<OracleViolatio
                 } else {
                     holders.insert((cell_id.clone(), *epoch), holder_id.clone());
                 }
-                let cur_max = max_epoch.entry(cell_id.clone()).or_insert(0);
-                if *epoch > *cur_max {
-                    *cur_max = *epoch;
+                if *epoch > cur_max {
+                    max_epoch.insert(cell_id.clone(), *epoch);
                 }
             }
             LeaseEvent::ApplyBatch {
@@ -113,6 +132,16 @@ pub fn check_po_bed_1_single_writer(events: &[LeaseEvent]) -> Vec<OracleViolatio
                 holder_id,
                 quarantined,
             } => {
+                if cell_id.trim().is_empty() || holder_id.trim().is_empty() {
+                    violations.push(OracleViolation {
+                        obligation: ProofObligation::PoBed1SingleWriter,
+                        event_index: idx,
+                        detail: format!(
+                            "blank cell_id ('{cell_id}') or holder_id ('{holder_id}') in ApplyBatch"
+                        ),
+                    });
+                    continue;
+                }
                 let high = max_epoch.get(cell_id).copied().unwrap_or(0);
                 if *epoch < high && !quarantined {
                     violations.push(OracleViolation {
@@ -123,17 +152,28 @@ pub fn check_po_bed_1_single_writer(events: &[LeaseEvent]) -> Vec<OracleViolatio
                         ),
                     });
                 }
-                if !quarantined
-                    && let Some(owner) = holders.get(&(cell_id.clone(), *epoch))
-                    && owner != holder_id
-                {
-                    violations.push(OracleViolation {
-                        obligation: ProofObligation::PoBed1SingleWriter,
-                        event_index: idx,
-                        detail: format!(
-                            "cell '{cell_id}' epoch {epoch}: non-holder '{holder_id}' applied batch (lease held by '{owner}')"
-                        ),
-                    });
+                if !quarantined {
+                    match holders.get(&(cell_id.clone(), *epoch)) {
+                        Some(owner) if owner != holder_id => {
+                            violations.push(OracleViolation {
+                                obligation: ProofObligation::PoBed1SingleWriter,
+                                event_index: idx,
+                                detail: format!(
+                                    "cell '{cell_id}' epoch {epoch}: non-holder '{holder_id}' applied batch (lease held by '{owner}')"
+                                ),
+                            });
+                        }
+                        None => {
+                            violations.push(OracleViolation {
+                                obligation: ProofObligation::PoBed1SingleWriter,
+                                event_index: idx,
+                                detail: format!(
+                                    "cell '{cell_id}' epoch {epoch}: unleased writer '{holder_id}' applied batch without an active lease"
+                                ),
+                            });
+                        }
+                        Some(_) => {}
+                    }
                 }
             }
         }
@@ -197,6 +237,7 @@ pub fn check_po_bed_3_root_last_cas(events: &[CasTraceEvent]) -> Vec<OracleViola
     let mut violations = Vec::new();
     let mut verified_chunks: BTreeSet<String> = BTreeSet::new();
     let mut live_pinned_chunks: BTreeSet<String> = BTreeSet::new();
+    let mut published_roots: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
     for (idx, ev) in events.iter().enumerate() {
         match ev {
@@ -222,6 +263,20 @@ pub fn check_po_bed_3_root_last_cas(events: &[CasTraceEvent]) -> Vec<OracleViola
                         ),
                     });
                 } else {
+                    let req_set: BTreeSet<String> = required_chunks.iter().cloned().collect();
+                    if let Some(existing) = published_roots.get(root_id)
+                        && existing != &req_set
+                    {
+                        violations.push(OracleViolation {
+                            obligation: ProofObligation::PoBed3RootLastCas,
+                            event_index: idx,
+                            detail: format!(
+                                "root '{root_id}' re-published with conflicting chunk set"
+                            ),
+                        });
+                    } else {
+                        published_roots.insert(root_id.clone(), req_set);
+                    }
                     for c in required_chunks {
                         live_pinned_chunks.insert(c.clone());
                     }
@@ -262,6 +317,7 @@ pub enum PostingEvent {
 pub fn check_po_bed_4_exactly_once_posting(events: &[PostingEvent]) -> Vec<OracleViolation> {
     let mut violations = Vec::new();
     let mut live_tokens: BTreeMap<String, String> = BTreeMap::new();
+    let mut seen_entry_ids: BTreeSet<String> = BTreeSet::new();
 
     for (idx, ev) in events.iter().enumerate() {
         match ev {
@@ -269,6 +325,25 @@ pub fn check_po_bed_4_exactly_once_posting(events: &[PostingEvent]) -> Vec<Oracl
                 slot_id,
                 journal_entry_id,
             } => {
+                if slot_id.trim().is_empty() || journal_entry_id.trim().is_empty() {
+                    violations.push(OracleViolation {
+                        obligation: ProofObligation::PoBed4ExactlyOncePosting,
+                        event_index: idx,
+                        detail: format!(
+                            "blank slot_id ('{slot_id}') or journal_entry_id ('{journal_entry_id}')"
+                        ),
+                    });
+                    continue;
+                }
+                if !seen_entry_ids.insert(journal_entry_id.clone()) {
+                    violations.push(OracleViolation {
+                        obligation: ProofObligation::PoBed4ExactlyOncePosting,
+                        event_index: idx,
+                        detail: format!(
+                            "slot '{slot_id}': reused journal_entry_id '{journal_entry_id}'"
+                        ),
+                    });
+                }
                 if let Some(existing) = live_tokens.get(slot_id) {
                     violations.push(OracleViolation {
                         obligation: ProofObligation::PoBed4ExactlyOncePosting,
@@ -285,6 +360,25 @@ pub fn check_po_bed_4_exactly_once_posting(events: &[PostingEvent]) -> Vec<Oracl
                 slot_id,
                 reversal_entry_id,
             } => {
+                if slot_id.trim().is_empty() || reversal_entry_id.trim().is_empty() {
+                    violations.push(OracleViolation {
+                        obligation: ProofObligation::PoBed4ExactlyOncePosting,
+                        event_index: idx,
+                        detail: format!(
+                            "blank slot_id ('{slot_id}') or reversal_entry_id ('{reversal_entry_id}')"
+                        ),
+                    });
+                    continue;
+                }
+                if !seen_entry_ids.insert(reversal_entry_id.clone()) {
+                    violations.push(OracleViolation {
+                        obligation: ProofObligation::PoBed4ExactlyOncePosting,
+                        event_index: idx,
+                        detail: format!(
+                            "slot '{slot_id}': reused reversal_entry_id '{reversal_entry_id}'"
+                        ),
+                    });
+                }
                 if live_tokens.remove(slot_id).is_none() {
                     violations.push(OracleViolation {
                         obligation: ProofObligation::PoBed4ExactlyOncePosting,
@@ -345,13 +439,41 @@ impl BridgeReplayState {
     }
 }
 
-/// Check `PO-BED-10` (Bridge outbox replay after crash leaves FA state digest completely unchanged).
+/// Check `PO-BED-10` (Bridge outbox replay after crash leaves FA state digest completely unchanged,
+/// and no idempotency key may be bound to conflicting payloads).
 #[must_use]
 pub fn check_po_bed_10_bridge_idempotency(
     intents: &[BridgeIntent],
     enforce_idempotency: bool,
 ) -> Vec<OracleViolation> {
     let mut violations = Vec::new();
+    let mut expected_payloads: BTreeMap<&str, (&str, i64)> = BTreeMap::new();
+    for (idx, intent) in intents.iter().enumerate() {
+        if intent.idempotency_key.trim().is_empty() {
+            violations.push(OracleViolation {
+                obligation: ProofObligation::PoBed10BridgeIdempotency,
+                event_index: idx,
+                detail: "blank idempotency_key in BridgeIntent".to_string(),
+            });
+            continue;
+        }
+        let payload = (intent.account_code.as_str(), intent.amount_cents);
+        if let Some(&prev) = expected_payloads.get(intent.idempotency_key.as_str()) {
+            if prev != payload {
+                violations.push(OracleViolation {
+                    obligation: ProofObligation::PoBed10BridgeIdempotency,
+                    event_index: idx,
+                    detail: format!(
+                        "idempotency_key '{}' reused with conflicting payload ({}, {}) vs ({}, {})",
+                        intent.idempotency_key, prev.0, prev.1, payload.0, payload.1
+                    ),
+                });
+            }
+        } else {
+            expected_payloads.insert(intent.idempotency_key.as_str(), payload);
+        }
+    }
+
     let mut state = BridgeReplayState {
         recorded_keys: BTreeSet::new(),
         ledger_rows: Vec::new(),
@@ -505,5 +627,155 @@ mod tests {
         let v10 = check_po_bed_10_bridge_idempotency(&intents, false);
         assert_eq!(v10.len(), 1);
         assert_eq!(v10[0].obligation, ProofObligation::PoBed10BridgeIdempotency);
+    }
+
+    #[test]
+    fn test_all_five_fm_oracles_catch_every_subtle_violation_class() {
+        // PO-BED-1: active holder write passes; epoch-0 grant, regressed epoch grant, dual holder,
+        // unleased writer, and non-holder write all fire.
+        let clean_write = vec![
+            LeaseEvent::GrantLease {
+                cell_id: "CELL-PIT".into(),
+                epoch: 1,
+                holder_id: "node-a".into(),
+            },
+            LeaseEvent::ApplyBatch {
+                cell_id: "CELL-PIT".into(),
+                epoch: 1,
+                holder_id: "node-a".into(),
+                quarantined: false,
+            },
+        ];
+        assert!(check_po_bed_1_single_writer(&clean_write).is_empty());
+
+        let unleased = vec![LeaseEvent::ApplyBatch {
+            cell_id: "CELL-PIT".into(),
+            epoch: 1,
+            holder_id: "rogue".into(),
+            quarantined: false,
+        }];
+        let v_unleased = check_po_bed_1_single_writer(&unleased);
+        assert_eq!(v_unleased.len(), 1);
+        assert!(v_unleased[0].detail.contains("unleased writer"));
+
+        let regressed_and_dual = vec![
+            LeaseEvent::GrantLease {
+                cell_id: "CELL-PIT".into(),
+                epoch: 0,
+                holder_id: "node-z".into(),
+            },
+            LeaseEvent::GrantLease {
+                cell_id: "CELL-PIT".into(),
+                epoch: 2,
+                holder_id: "node-b".into(),
+            },
+            LeaseEvent::GrantLease {
+                cell_id: "CELL-PIT".into(),
+                epoch: 1,
+                holder_id: "node-a".into(),
+            },
+            LeaseEvent::GrantLease {
+                cell_id: "CELL-PIT".into(),
+                epoch: 2,
+                holder_id: "node-c".into(),
+            },
+            LeaseEvent::ApplyBatch {
+                cell_id: "CELL-PIT".into(),
+                epoch: 2,
+                holder_id: "node-c".into(),
+                quarantined: false,
+            },
+        ];
+        let v_bed1 = check_po_bed_1_single_writer(&regressed_and_dual);
+        assert_eq!(v_bed1.len(), 4);
+
+        // PO-BED-2: empty replica and exact match pass; overlong replica fires.
+        let d0 = blake3_hash(b"b0");
+        let d1 = blake3_hash(b"b1");
+        assert!(check_po_bed_2_prefix_consistency("CELL-PIT", &[d0], &[]).is_empty());
+        assert!(check_po_bed_2_prefix_consistency("CELL-PIT", &[d0], &[d0]).is_empty());
+        let v_overlong = check_po_bed_2_prefix_consistency("CELL-PIT", &[d0], &[d0, d1]);
+        assert_eq!(v_overlong.len(), 1);
+        assert!(v_overlong[0].detail.contains("exceeds writer length"));
+
+        // PO-BED-3: deleting unreferenced chunk passes; deleting pinned chunk and conflicting root
+        // re-publication both fire.
+        let cas_events = vec![
+            CasTraceEvent::WriteAndVerifyChunk {
+                chunk_id: "c0".into(),
+            },
+            CasTraceEvent::WriteAndVerifyChunk {
+                chunk_id: "c1".into(),
+            },
+            CasTraceEvent::WriteAndVerifyChunk {
+                chunk_id: "c_unused".into(),
+            },
+            CasTraceEvent::DeleteUnreferencedChunk {
+                chunk_id: "c_unused".into(),
+            },
+            CasTraceEvent::PublishRoot {
+                root_id: "r0".into(),
+                required_chunks: vec!["c0".into()],
+            },
+            CasTraceEvent::PublishRoot {
+                root_id: "r0".into(),
+                required_chunks: vec!["c0".into(), "c1".into()],
+            },
+            CasTraceEvent::DeleteUnreferencedChunk {
+                chunk_id: "c0".into(),
+            },
+        ];
+        let v_cas = check_po_bed_3_root_last_cas(&cas_events);
+        assert_eq!(v_cas.len(), 2);
+        assert!(v_cas[0].detail.contains("conflicting chunk set"));
+        assert!(v_cas[1].detail.contains("still referenced"));
+
+        // PO-BED-4: unmatched reversal and reused journal entry ID both fire.
+        let post_bugs = vec![
+            PostingEvent::SupersedeWithReversal {
+                slot_id: "slot-empty".into(),
+                reversal_entry_id: "REV-ORPHAN".into(),
+            },
+            PostingEvent::CommitOriginal {
+                slot_id: "slot-a".into(),
+                journal_entry_id: "JE-1".into(),
+            },
+            PostingEvent::SupersedeWithReversal {
+                slot_id: "slot-a".into(),
+                reversal_entry_id: "REV-1".into(),
+            },
+            PostingEvent::CommitOriginal {
+                slot_id: "slot-a".into(),
+                journal_entry_id: "JE-1".into(),
+            },
+        ];
+        let v_post = check_po_bed_4_exactly_once_posting(&post_bugs);
+        assert_eq!(v_post.len(), 2);
+        assert!(v_post[0].detail.contains("0 live originals"));
+        assert!(v_post[1].detail.contains("reused journal_entry_id"));
+
+        // PO-BED-10: conflicting payload under same idempotency key and blank key both fire even
+        // when enforce_idempotency is true.
+        let drift_intents = vec![
+            BridgeIntent {
+                idempotency_key: "key-001".into(),
+                account_code: "5100-MINING".into(),
+                amount_cents: 100,
+            },
+            BridgeIntent {
+                idempotency_key: "key-001".into(),
+                account_code: "5100-MINING".into(),
+                amount_cents: 200,
+            },
+            BridgeIntent {
+                idempotency_key: "  ".into(),
+                account_code: "5200-MILLING".into(),
+                amount_cents: 50,
+            },
+        ];
+        let v_drift = check_po_bed_10_bridge_idempotency(&drift_intents, true);
+        assert_eq!(v_drift.len(), 2);
+        assert!(v_drift[0].detail.contains("conflicting payload"));
+        assert!(v_drift[1].detail.contains("blank idempotency_key"));
     }
 }
