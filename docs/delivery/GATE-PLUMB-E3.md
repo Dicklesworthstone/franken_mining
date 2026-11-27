@@ -52,6 +52,8 @@ Test: `fmine-gen::tests/gate_plumb_e3.rs::test_gate_plumb_e3_layered_stack_resto
 
 Every layered coverage metric across all three regimes falls strictly inside `[0.75, 0.85]` (`±5` points of nominal 80%), while both the unsegmented single global posterior (`< 0.65` over `k=1..=12`, `< 0.70` at `k=12`) and raw L1/L2 (`< 0.55`) documentably fail.
 
+In the pure dispersion regime the two-sided CUSUM also reacts to the larger residuals and usually alarms first, so coverage alone would pass with the dispersion e-process dead: a review (2026-11-27) found that switching the e-processes off left coverage in band and cost only 11 full windows (185, against the 190 required). The gate now also requires the e-process pair to alarm in at least 190 of the 200 dispersion worlds. It does in `196`; a dead e-process gives `0`.
+
 ### Control-Mine Non-Interference (`WorldCondition::CorrectlySpecified`, `N = 1,000`, `T = 120`, seed base `20_280_259`)
 
 | Worlds | False Alarms | 95% CP Upper Bound | Sharpness Loss |

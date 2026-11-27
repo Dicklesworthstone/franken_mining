@@ -61,6 +61,8 @@ fn layered_config() -> LayeredConfig {
 struct E3RegimeSummary {
     worlds: usize,
     alarmed_worlds: usize,
+    /// Worlds whose e-process pair (location or dispersion) has alarmed by the last period.
+    eproc_alarmed_worlds: usize,
     worlds_with_full_window: usize,
     /// Pooled 80% coverage across all 12 post-alarm resolutions (`k = 1..=12`).
     layered_cov_1_12: f64,
@@ -83,6 +85,7 @@ where
 {
     let cfg = layered_config();
     let mut alarmed_worlds = 0usize;
+    let mut eproc_alarmed_worlds = 0usize;
     let mut worlds_with_full_window = 0usize;
     let mut alarm_periods = Vec::with_capacity(worlds);
 
@@ -108,6 +111,7 @@ where
 
         let mut alarm_step: Option<usize> = None;
         let mut post_count = 0usize;
+        let mut eproc_alarmed = false;
 
         for (t, &y) in ys.iter().enumerate() {
             let pred = stack.predict(raw).expect("stack predict");
@@ -143,6 +147,7 @@ where
                 .observe_resolution(raw, ForecastOutcome(y))
                 .expect("global observe");
 
+            eproc_alarmed = snap.eproc_alarm;
             if alarm_step.is_none() && snap.any_alarm {
                 assert_eq!(
                     snap.first_any_alarm,
@@ -153,6 +158,7 @@ where
             }
         }
 
+        eproc_alarmed_worlds += usize::from(eproc_alarmed);
         if let Some(step) = alarm_step {
             alarmed_worlds += 1;
             alarm_periods.push(step);
@@ -170,6 +176,7 @@ where
     E3RegimeSummary {
         worlds,
         alarmed_worlds,
+        eproc_alarmed_worlds,
         worlds_with_full_window,
         layered_cov_1_12: (layered_hits_1_12 as f64) / (total_1_12.max(1) as f64),
         layered_cov_4_12: (layered_hits_4_12 as f64) / (total_4_12.max(1) as f64),
@@ -236,8 +243,9 @@ fn test_gate_plumb_e3_layered_stack_restores_coverage_while_global_posterior_fai
         (ys, CAPEX_BASE_SIGMA)
     });
 
-    // 3. Regime C: Pure zero-mean 2.5x dispersion explosion at t = 60 (verifies the dispersion
-    // e-process -> L3 Student-t coverage-restoration path when CUSUM has no mean shift).
+    // 3. Regime C: Pure zero-mean 2.5x dispersion explosion at t = 60. The two-sided CUSUM also reacts to the
+    // larger |z| and usually alarms first, so coverage alone does not show the dispersion e-process works; the
+    // e-process alarm count below does (196 of 200 on this seed, none if the e-process is dead).
     let dispersion = evaluate_regime(REPLICATE_WORLDS, |w| {
         let mut rng = PhiloxStream::new(RngKey {
             seed_root: GATE_PLUMB_E3_SEED_BASE + 30_000,
@@ -259,6 +267,12 @@ fn test_gate_plumb_e3_layered_stack_restores_coverage_while_global_posterior_fai
         (ys, CAPEX_BASE_SIGMA)
     });
 
+    assert!(
+        dispersion.eproc_alarmed_worlds >= 190,
+        "pure_dispersion_shift: the e-process alarmed in only {}/{} worlds",
+        dispersion.eproc_alarmed_worlds,
+        dispersion.worlds
+    );
     for (name, res) in [
         ("out_of_model_fault", &fault),
         ("biased_capex_process", &capex),
@@ -358,7 +372,7 @@ fn test_gate_plumb_e3_layered_stack_restores_coverage_while_global_posterior_fai
         "{{\"gate\":\"GATE-PLUMB-E3\",\"seed_base\":{GATE_PLUMB_E3_SEED_BASE},\"replicates\":{REPLICATE_WORLDS},\"window\":{POST_ALARM_WINDOW},\
           \"fault\":{{\"alarmed\":{},\"full_window\":{},\"median_alarm\":{},\"layered_cov_1_12\":{:.5},\"layered_cov_4_12\":{:.5},\"layered_cov_at_12\":{:.5},\"global_cov_1_12\":{:.5},\"global_cov_at_12\":{:.5},\"raw_cov_1_12\":{:.5}}},\
           \"capex\":{{\"alarmed\":{},\"full_window\":{},\"median_alarm\":{},\"layered_cov_1_12\":{:.5},\"layered_cov_4_12\":{:.5},\"layered_cov_at_12\":{:.5},\"global_cov_1_12\":{:.5},\"global_cov_at_12\":{:.5},\"raw_cov_1_12\":{:.5}}},\
-          \"dispersion\":{{\"alarmed\":{},\"full_window\":{},\"median_alarm\":{},\"layered_cov_1_12\":{:.5},\"layered_cov_4_12\":{:.5},\"layered_cov_at_12\":{:.5},\"global_cov_1_12\":{:.5},\"global_cov_at_12\":{:.5},\"raw_cov_1_12\":{:.5}}},\
+          \"dispersion\":{{\"alarmed\":{},\"eproc_alarmed\":{},\"full_window\":{},\"median_alarm\":{},\"layered_cov_1_12\":{:.5},\"layered_cov_4_12\":{:.5},\"layered_cov_at_12\":{:.5},\"global_cov_1_12\":{:.5},\"global_cov_at_12\":{:.5},\"raw_cov_1_12\":{:.5}}},\
           \"control\":{{\"worlds\":{CONTROL_WORLDS},\"alarms\":{ctrl_alarms},\"cp95\":{ctrl_cp95:.5},\"sharpness_loss\":{ctrl_sharpness_loss:.5}}}}}",
         fault.alarmed_worlds,
         fault.worlds_with_full_window,
@@ -379,6 +393,7 @@ fn test_gate_plumb_e3_layered_stack_restores_coverage_while_global_posterior_fai
         capex.global_cov_at_12,
         capex.raw_cov_1_12,
         dispersion.alarmed_worlds,
+        dispersion.eproc_alarmed_worlds,
         dispersion.worlds_with_full_window,
         dispersion.median_alarm_period,
         dispersion.layered_cov_1_12,
