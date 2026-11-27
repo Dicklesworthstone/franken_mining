@@ -139,6 +139,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-drill"
+version = "0.1.0"
+dependencies = [
+ "fmine-claim",
+ "fmine-core",
+ "fmine-evidence",
+ "fmine-ledger",
+ "fmine-runtime",
+]
+
+[[package]]
 name = "fmine-econ"
 version = "0.1.0"
 dependencies = [
@@ -210,6 +221,7 @@ dependencies = [
  "fmine-claim",
  "fmine-core",
  "fmine-crs",
+ "fmine-drill",
  "fmine-evidence",
  "fmine-explore",
  "fmine-geom",
