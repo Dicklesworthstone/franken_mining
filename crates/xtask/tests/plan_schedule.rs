@@ -444,6 +444,59 @@ fn lane_cutoff_binary_replays_pinned_symbolic_ratios_and_grade_screens() {
 }
 
 #[test]
+fn lane_cutoff_binary_reports_no_grade_when_break_even_exceeds_one_tonne_per_tonne() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let scratch = std::env::temp_dir().join(format!(
+        "fmine-lane-ceiling-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&scratch).unwrap();
+    let original = std::fs::read_to_string(root.join("tests/planning/lane_cutoff.json")).unwrap();
+    let rows = |name: &str, milling: &str| {
+        // Metal in tonnes: the ceiling is one tonne of metal per dry tonne of ore.
+        let text = original
+            .replace("\"g\"", "\"t\"")
+            .replace("\"17.1\"", &format!("\"{milling}\""));
+        std::fs::write(scratch.join(name), text).unwrap();
+        let report = lane_json(&lane(&scratch, name, "json"));
+        assert_eq!(report.get("status").unwrap().as_str(), Some("ok"), "{name}");
+        let payload = report.get("payload").unwrap();
+        payload
+            .get("limiting_cutoffs")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                (
+                    row.get("cutoff_grade").unwrap().clone(),
+                    row.get("feed_grade_screen")
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_string(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    // Milling at 171 a dry tonne needs 171 / (95 x 0.9) = 2 t of metal in each dry tonne at the mine limit, and
+    // more at the mill and market limits: no ore can carry it.
+    for (grade, screen) in rows("above.json", "171") {
+        assert_eq!(grade, Json::Null);
+        assert_eq!(screen, "entire_band_below");
+    }
+    // At 85.5 the mine limit is exactly the ceiling, which ore can carry, and the other two lie above it.
+    let at = rows("at.json", "85.5");
+    assert_eq!(at[0].0.as_str(), Some("1/1"), "{at:?}");
+    assert_eq!((&at[1].0, &at[2].0), (&Json::Null, &Json::Null));
+    assert!(at.iter().all(|(_, screen)| screen == "entire_band_below"));
+}
+
+#[test]
 fn lane_cutoff_binary_preserves_units_and_refuses_incomplete_or_invalid_basis() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let scratch = std::env::temp_dir().join(format!(

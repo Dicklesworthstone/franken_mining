@@ -133,11 +133,28 @@ fn evaluate_cutoffs(
                 .as_deref()
                 .map(|bins| terms.balance_feed(bins, max_grade, GradeRecovery::Constant(recovery)))
                 .transpose()?;
+            // A break-even grade above one tonne of metal per dry tonne is one no ore can carry.
+            let bounded = |grade: ExactQty| -> Result<CurveCutoff, Refusal> {
+                let above = grade
+                    .checked_cmp(max_grade)
+                    .map_err(|_| {
+                        Refusal::new(
+                            RefusalCode::NumericalCertificateFailed207,
+                            "break-even grade comparison exceeds exact arithmetic range",
+                        )
+                    })?
+                    .is_gt();
+                Ok(if above {
+                    CurveCutoff::NoSupportedGradeClears
+                } else {
+                    CurveCutoff::AtGrade(grade)
+                })
+            };
             Ok(ScenarioCutoffs {
                 limits: LaneCutoffs {
-                    mine: CurveCutoff::AtGrade(c.mine),
-                    mill: CurveCutoff::AtGrade(c.mill),
-                    market: CurveCutoff::AtGrade(c.market),
+                    mine: bounded(c.mine)?,
+                    mill: bounded(c.mill)?,
+                    market: bounded(c.market)?,
                 },
                 support: None,
                 balance,

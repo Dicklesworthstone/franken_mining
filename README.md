@@ -1441,7 +1441,7 @@ grade of **1/5 g/t**, straddles the market-limited grade of **5/23 g/t**, and fa
 grade of **4/15 g/t**. Equality clears a threshold. Omit the band to get grades alone. JSON and Markdown
 retain the submitted source digest, exact ratios, the metal and currency units, dry metric tonne basis,
 and the 100% project basis. The command refuses a declared feed grade whose contained metal exceeds
-the ore mass.
+the ore mass. A break-even grade above that limit is reported as no grade clearing, without a number.
 
 To use grade-dependent testwork, replace `recovery_fraction` with `recovery_curve`. Each knot
 declares `grade_per_dry_tonne` and `recovery_fraction`. The calculation interpolates **recovered
