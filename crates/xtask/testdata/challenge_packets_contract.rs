@@ -747,7 +747,14 @@ fn markdown_escapes_source_markup_and_cannot_close_a_json_fence() {
 #[ignore = "requires the registered public workbook corpus"]
 fn barrick_vintage_packets_match_nine_silent_changes_and_e474() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let report = fmine_public::run_barrick_m0_assurance(&root).expect("registered assurance");
+    // FACT: E474 and W1-DR-09 were recorded over the vintages through 2026Q2, the population the sibling
+    // real_mine_stats_vintages_keep_e474_and_basis_conflicts also pins. The Q3 2026 workbooks admitted in
+    // 8c3bbf80 restate two more 2025Q3 cells, recorded on bd-urub.3, so the full registry has 11.
+    let profile = fmine_public::sources::load_issuer_profile(&root, "barrick")
+        .expect("profile")
+        .through("2026Q2")
+        .expect("E474 and W1-DR-09 source population");
+    let report = fmine_public::run_public_assurance(&profile, &root).expect("registered assurance");
     let packets = vintage_packets(&report);
     let mine_packets: Vec<_> = packets
         .iter()
