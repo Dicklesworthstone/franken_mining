@@ -557,6 +557,38 @@ def lp_guidance():
     assert "work budget exceeded" in refused["refusal"]["what"]
 
 
+def three_route_split_only_insertion():
+    (ROOT / "model.pcpsp").write_bytes(
+        (REPO / "tests/planning/three_route_split.pcpsp").read_bytes())
+    (ROOT / "model.prec").write_bytes((REPO / "tests/planning/split_only.prec").read_bytes())
+    values = [[10, 20, 30]]
+    uses = [[[10, 0, 0, 1], [0, 10, 0, 1], [0, 0, 10, -1]]]
+    caps = [[2], [3], [5], [0]]
+    feasible = []
+    for a in range(11):
+        for b in range(11 - a):
+            parts = [a, b, 10 - a - b]
+            allocation = [(0, d, 0, Q(part, 10)) for d, part in enumerate(parts) if part]
+            value, fits = value_and_feasible(values, uses, [[]], 1, caps, allocation, [2**40])
+            if fits:
+                feasible.append((value, allocation))
+    assert feasible == [(Q(23), [(0, 0, 0, Q(1, 5)), (0, 1, 0, Q(3, 10)), (0, 2, 0, Q(1, 2))])]
+    for flags in (["--rounds", "0"], ["--share-decimals", "0"]):
+        disabled = verify(command(flags), values, uses, [[]], caps)
+        assert rows(disabled["selected"]["solution"]) == []
+    for flags in ([], ["--share-decimals", "1", "--rounds", "1"]):
+        report = command(flags)
+        assert fraction(report["payload"]["selected"]["discounted_value"]) == 23
+        p = verify(report, values, uses, [[]], caps, feasible[0][0])
+        assert p["selected"]["origin"] == "fractional_insertion" and p["candidate"] is None
+        assert rows(p["selected"]["solution"]) == feasible[0][1]
+        search = p["fractional_insertion_search"]
+        assert search["insertions"] == search["three_destination_insertions"] == 1
+        assert search["maximum_destinations_per_inserted_block"] == 3
+        assert search["existing_assignments_preserved"] and not search["work_exhausted"]
+        assert command(flags) == report
+
+
 known_split()
 automatic_fractional()
 master_mixtures()
@@ -564,6 +596,7 @@ joint_routes()
 fractional_periods()
 joint_fractional_periods()
 split_only_insertions()
+three_route_split_only_insertion()
 generated_models()
 lp_guidance()
 print("PASS: exact split and simultaneous-mixture oracles, joint route/period5-to6 improvement, imported fixed-fraction period22.5-to25 improvement, split-only block insertion with independent decimal enumeration, 16 enumerated models, LP-guided10-to18 improvement, advisory iteration-limit shares, signed scope, external dominance and preallocation refusal; global bounds independently replayed")

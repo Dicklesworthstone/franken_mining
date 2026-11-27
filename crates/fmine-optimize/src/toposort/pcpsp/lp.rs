@@ -713,6 +713,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn inactive_zero_price_blend_row_cannot_dampen_the_capacity_price_step() {
+        let m = parse(
+            r#"NAME: inactive-blend-credit
+TYPE: PCPSP
+NBLOCKS: 1
+NPERIODS: 1
+NDESTINATIONS: 2
+NRESOURCE_SIDE_CONSTRAINTS: 2
+NGENERAL_SIDE_CONSTRAINTS: 0
+DISCOUNT_RATE: 0
+RESOURCE_CONSTRAINT_LIMITS:
+0 0 L 1
+1 0 L 0
+OBJECTIVE_FUNCTION:
+0 0 10
+RESOURCE_CONSTRAINT_COEFFICIENTS:
+0 1 0 2
+0 1 1 -1000000
+EOF"#,
+            "0 0\n",
+            0,
+            Rounding::Refuse,
+            0,
+        )
+        .unwrap();
+        let factors = discount_factors(0, 1, 1).unwrap();
+        let factor = factors[0];
+        // The profitable route consumes two units per block against one unit of
+        // capacity. A half share reaches 5; a price of 5 per unit bounds it.
+        // The blend credit is slack and its price starts at the lower bound.
+        let optimum = 5 * i128::from(factor);
+        let run = lagrangian_bound(&m, &[0], &factors, optimum, 2).unwrap();
+        assert_eq!(run.history, [10 * i128::from(factor), optimum]);
+        assert_eq!(run.prices, [vec![5 * factor], vec![0]]);
+        assert_eq!(
+            lagrangian_value(&m, &[0], &factors, &run.prices)
+                .unwrap()
+                .bound,
+            optimum
+        );
+    }
+
     /// The best discounted value at `f` over every schedule of `m`, each block whole at one destination in one period
     /// or left out, found by trying them all. Requirements and limits are checked here, not by [`check`].
     fn best_by_enumeration(m: &PcpspModel, f: &[i64]) -> i128 {

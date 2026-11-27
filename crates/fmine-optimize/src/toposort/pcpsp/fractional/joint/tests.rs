@@ -295,6 +295,87 @@ fn inserts_a_profitable_block_that_is_feasible_only_as_a_split() {
 }
 
 #[test]
+fn three_route_insertions_match_independent_signed_grid_enumeration() {
+    let mut inserted = 0;
+    let mut empty_results = 0;
+    for seed in 0..50_i64 {
+        let m = PcpspModel {
+            destinations: 3,
+            values: vec![seed % 5 - 2, 7, 11],
+            uses: vec![
+                vec![10, 0, 0],
+                vec![0, 10, 0],
+                vec![0, 0, 10],
+                vec![seed % 7 - 3, -2, 3],
+                vec![2, (seed * 3) % 9 - 4, -1],
+            ],
+            limits: vec![vec![3, 4], vec![4, 3], vec![5, 5], vec![0, 1], vec![1, 0]],
+            ..model(&[[0, 0]], &[vec![[0, 0]]], &[vec![0, 0]])
+        };
+        let factors = [3, 2];
+        let empty = candidate::SplitSchedule::new(&m, vec![], 1).unwrap();
+        let p = insert(&m, &empty, &factors, 1).unwrap();
+        let mut best = 0;
+        for (t, &factor) in factors.iter().enumerate() {
+            for a in 0..=10 {
+                for b in 0..=10 - a {
+                    let c = 10 - a - b;
+                    let rows_fit = m
+                        .uses
+                        .iter()
+                        .zip(&m.limits)
+                        .all(|(u, cap)| u[0] * a + u[1] * b + u[2] * c <= 10 * cap[t]);
+                    if rows_fit {
+                        assert!(a > 0 && b > 0 && c > 0);
+                        best = best
+                            .max((m.values[0] * a + m.values[1] * b + m.values[2] * c) * factor);
+                    }
+                }
+            }
+        }
+        assert_eq!(p.search.after, i128::from(best), "seed {seed}");
+        assert!(p.checked.feasible());
+        assert_eq!(p.search.three_destination_insertions, usize::from(best > 0));
+        inserted += usize::from(best > 0);
+        empty_results += usize::from(best == 0);
+    }
+    assert!(inserted > 0 && empty_results > 0);
+}
+
+#[test]
+fn fine_grid_three_route_insertion_obeys_exact_caps_and_work_budget() {
+    let mut m = PcpspModel {
+        destinations: 3,
+        values: vec![10, 20, 30],
+        uses: vec![vec![1_000, 0, 0], vec![0, 1_000, 0], vec![0, 0, 1_000]],
+        limits: vec![vec![203], vec![317], vec![480]],
+        ..model(&[[0, 0]], &[vec![[0, 0]]], &[vec![0]])
+    };
+    let empty = candidate::SplitSchedule::new(&m, vec![], 9).unwrap();
+    let p = insert(&m, &empty, &[1], 1).unwrap();
+    assert_eq!(
+        candidate::write_solution(&p.schedule),
+        "0 0 0 0.203\n0 1 0 0.317\n0 2 0 0.48\n"
+    );
+    assert_eq!(p.search.after, 22_770_000_000);
+    for budget in [0, p.search.work - 1, p.search.work] {
+        let limited = insert_bounded(&m, &empty, &[1], 1, budget).unwrap();
+        assert!(limited.search.work <= budget);
+        assert!(limited.checked.feasible());
+        assert_eq!(limited.search.work_exhausted, budget < p.search.work);
+        assert_eq!(
+            limited.checked.discounted_value(&[1]).unwrap(),
+            limited.search.after
+        );
+        assert!(limited.search.after <= p.search.after);
+    }
+    let coarse = candidate::SplitSchedule::new(&m, vec![], 2).unwrap();
+    assert_eq!(insert(&m, &coarse, &[1], 1).unwrap().schedule, coarse);
+    m.requires[0] = vec![0];
+    assert_eq!(insert(&m, &empty, &[1], 1).unwrap().schedule, p.schedule);
+}
+
+#[test]
 fn insertion_preserves_existing_routes_and_waits_for_predecessors() {
     let mut m = model(
         &[[7, 9], [5, 6], [1, 2]],

@@ -1541,9 +1541,9 @@ not change fractions, add or drop blocks, or move several blocks simultaneously;
 optimality claim.
 
 DESIGN (BD-252/253): exact block insertion also searches unmined blocks, including from an empty
-incumbent. A block can enter when its predecessors are already mined and a complete allocation across
-one or two destinations fits every signed resource row. This fills a gap in whole-route starts: some
-blocks are feasible only as a split.
+incumbent. A block can enter when its predecessors are already mined and a complete allocation fits
+every signed resource row. The search starts with one or two destinations. If it stalls, the same
+round also tries allocations across three destinations.
 
 ```bash
 cargo run --release -p fmine-cli -- plan schedule \
@@ -1555,10 +1555,14 @@ In this synthetic example, either whole route exceeds a different resource limit
 admits one complete block worth **10**, without an external candidate. Every accepted insertion strictly
 increases discounted value while preserving existing assignments. An exact share absent from the
 declared decimal grid is not rounded into feasibility. The search uses `--rounds` and its own 262,144
-work-unit limit; `--rounds 0` disables it. `fractional_insertion_search` reports the seed, inserted count,
-exact values and consumed work. Nontrivial precedence cycles, loss-making prerequisite bundles,
-simultaneous insertions and new allocations across three or more destinations remain outside this
-bounded search. Final feasibility and the full-model upper bound are independently recomputed.
+work-unit limit. `--rounds 0` disables it. `fractional_insertion_search` reports the seed, inserted count,
+three-destination insertions, exact values and consumed work. Run the same command with
+`--pcpsp tests/planning/three_route_split.pcpsp` for a synthetic **20/30/50** insertion worth **23**
+that needs all three routes. For each triple, the search samples at most 101 representable shares of
+the last destination and finds the exact best pair for each sample. On finer grids, it may miss
+feasible allocations. Nontrivial cycles, loss-making prerequisite bundles, simultaneous insertions and
+allocations across four or more destinations remain outside this bounded search. Final feasibility and
+the full-model upper bound are independently recomputed.
 
 DESIGN (BD-252/253): the subsequent joint search can move one block and change its destination fractions
 in the same step, or improve its routing within the current period. It checks every destination pair

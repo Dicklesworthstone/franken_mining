@@ -1,4 +1,4 @@
-//! Exact joint mining-period/two-route moves and profitable two-route insertions.
+//! Exact joint mining-period/two-route moves and bounded fractional insertions.
 //! Determinism: BitwisePortable
 //!
 //! For one block, a destination pair and a proposed period, every signed
@@ -16,6 +16,9 @@ use crate::toposort::refuse;
 
 /// Shared bound on precedence scans, period scans and destination-pair rows.
 pub const WORK: usize = 262_144;
+
+/// At most this many intervals between sampled third-route shares.
+const THIRD_SHARE_INTERVALS: i128 = 100;
 
 /// Exact objective numerators and actual work for the joint neighborhood.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +51,8 @@ pub struct InsertionSearch {
     pub after: i128,
     pub rounds: usize,
     pub insertions: usize,
+    pub three_destination_insertions: usize,
+    pub maximum_destinations_per_inserted_block: usize,
     pub trials: usize,
     pub work: usize,
     pub work_exhausted: bool,
@@ -105,6 +110,26 @@ fn charge(search: &mut JointSearch, budget: usize, work: usize) -> bool {
     true
 }
 
+fn restrict_fraction(
+    lo: &mut i128,
+    hi: &mut i128,
+    slope: i128,
+    rhs: i128,
+) -> Result<bool, Refusal> {
+    if slope == 0 {
+        return Ok(rhs >= 0);
+    }
+    // Euclidean division floors for a positive divisor and ceils for a
+    // negative divisor, exactly the respective inclusive bounds.
+    let end = rhs.checked_div_euclid(slope).ok_or_else(overflow)?;
+    if slope > 0 {
+        *hi = (*hi).min(end);
+    } else {
+        *lo = (*lo).max(end);
+    }
+    Ok(lo <= hi)
+}
+
 /// Best feasible integer share of `right` when the remaining share goes to
 /// `left`. Negative row slopes impose lower bounds; positive slopes impose
 /// upper bounds. Endpoints remain inclusive and are never rounded outside.
@@ -115,8 +140,9 @@ fn fraction(
     right: usize,
     room: &[i128],
     scale: i128,
+    minimum_each: i128,
 ) -> Result<Option<i128>, Refusal> {
-    let (mut lo, mut hi) = (0_i128, scale);
+    let (mut lo, mut hi) = (minimum_each, scale - minimum_each);
     let start = block * model.destinations();
     for (row, &room) in model.uses.iter().zip(room) {
         let base = i128::from(row[start + left]);
@@ -124,21 +150,7 @@ fn fraction(
         let rhs = room
             .checked_sub(base.checked_mul(scale).ok_or_else(overflow)?)
             .ok_or_else(overflow)?;
-        if slope == 0 {
-            if rhs < 0 {
-                return Ok(None);
-            }
-        } else {
-            // Euclidean division is floor for a positive divisor and ceil
-            // for a negative divisor, exactly the two required bounds.
-            let end = rhs.checked_div_euclid(slope).ok_or_else(overflow)?;
-            if slope > 0 {
-                hi = hi.min(end);
-            } else {
-                lo = lo.max(end);
-            }
-        }
-        if lo > hi {
+        if !restrict_fraction(&mut lo, &mut hi, slope, rhs)? {
             return Ok(None);
         }
     }
@@ -318,7 +330,7 @@ fn improve_bounded(
                             break 'periods;
                         }
                         search.trials += 1;
-                        let Some(x) = fraction(model, b, left, right, &room, scale)? else {
+                        let Some(x) = fraction(model, b, left, right, &room, scale, 0)? else {
                             continue;
                         };
                         let value = (i128::from(model.values[at + left]) * (scale - x))
@@ -410,16 +422,20 @@ fn improve_bounded(
 }
 
 /// Add profitable unmined blocks, including blocks feasible only when split
-/// between two destinations. Every new block is mined completely in one period;
-/// its at-most-two fractions sum to exactly one on the original decimal grid.
+/// among three destinations. Every new block is mined completely in one period;
+/// its fractions sum to exactly one on the original decimal grid.
 /// Existing assignments remain unchanged, including any larger splits.
 ///
 /// Blocks are visited in ID order. All required blocks must already be mined
 /// by the proposed period (a self arc is harmless). Every period and destination
 /// pair is considered in ID order, and only a strict positive exact gain is
-/// retained. Equal gains keep the first proposal. Later rounds may admit a
-/// block unlocked by an earlier insertion, but no nontrivial precedence cycle,
-/// loss-making prerequisite bundle or coordinated block insertion is searched.
+/// retained. Equal gains keep the first proposal. If pair insertion stalls,
+/// the same round tries three destinations. For each triple, the last
+/// destination's necessary share interval is sampled at up to 101 grid points
+/// (including endpoints). The other two shares are optimized exactly for each
+/// sample. Later rounds may revisit blocks unlocked by an earlier insertion.
+/// Nontrivial precedence cycles, loss-making prerequisites and coordinated
+/// block insertion are outside this neighborhood.
 ///
 /// Every signed resource limit remains feasible after each insertion. At most
 /// [`WORK`] block scans, precedence scans, period scans and destination-pair
@@ -438,6 +454,57 @@ pub fn insert(
     insert_bounded(model, original, factors, rounds, WORK)
 }
 
+fn three_destination_trials(
+    model: &PcpspModel,
+    block: usize,
+    room: &[i128],
+    scale: i128,
+    search: &mut InsertionSearch,
+    budget: usize,
+    mut consider: impl FnMut(&[(usize, i128)]) -> Result<(), Refusal>,
+) -> Result<(), Refusal> {
+    let start = block * model.destinations();
+    let mut pair_room = vec![0; room.len()];
+    for left in 0..model.destinations() {
+        for right in left + 1..model.destinations() {
+            'third: for third in right + 1..model.destinations() {
+                if !search.charge(budget, room.len() + 1) {
+                    return Ok(());
+                }
+                let (mut lo, mut hi) = (1, scale - 2);
+                for (row, &room) in model.uses.iter().zip(room) {
+                    // Even assigning the remaining share entirely to the
+                    // cheaper route in this row must leave the row feasible.
+                    let base = i128::from(row[start + left].min(row[start + right]));
+                    let slope = i128::from(row[start + third]) - base;
+                    let rhs = room.checked_sub(base * scale).ok_or_else(overflow)?;
+                    if !restrict_fraction(&mut lo, &mut hi, slope, rhs)? {
+                        continue 'third;
+                    }
+                }
+                let steps = (hi - lo).min(THIRD_SHARE_INTERVALS);
+                for step in 0..=steps {
+                    if !search.charge(budget, 3 * room.len() + 1) {
+                        return Ok(());
+                    }
+                    search.trials += 1;
+                    let z = lo + (hi - lo) * step / steps.max(1);
+                    for ((out, &room), row) in pair_room.iter_mut().zip(room).zip(&model.uses) {
+                        *out = room
+                            .checked_sub(i128::from(row[start + third]) * z)
+                            .ok_or_else(overflow)?;
+                    }
+                    if let Some(x) = fraction(model, block, left, right, &pair_room, scale - z, 1)?
+                    {
+                        consider(&[(left, scale - z - x), (right, x), (third, z)])?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn insert_bounded(
     model: &PcpspModel,
     original: &candidate::SplitSchedule,
@@ -453,11 +520,19 @@ fn insert_bounded(
         return Err(bad("insertion starting schedule is infeasible"));
     }
     let before = checked.discounted_value(factors)?;
+    let scale = i128::from(original.scale());
+    let max_destinations = if scale == 1 {
+        1
+    } else {
+        model.destinations().min(3)
+    };
     let mut search = InsertionSearch {
         before,
         after: before,
         rounds: 0,
         insertions: 0,
+        three_destination_insertions: 0,
+        maximum_destinations_per_inserted_block: max_destinations,
         trials: 0,
         work: 0,
         work_exhausted: false,
@@ -470,15 +545,15 @@ fn insert_bounded(
         });
     }
     let original_mined = checked.mined;
-    let scale = i128::from(original.scale());
     let mut periods = vec![None; model.blocks()];
     let mut assignments = original.assignments().to_vec();
     for a in &assignments {
         periods[a.block as usize] = Some(a.period as usize);
     }
     let mut used = checked.used;
-    'rounds: for _ in 0..rounds {
-        search.rounds += 1;
+    let mut try_three = false;
+    'rounds: while search.rounds < rounds || try_three {
+        search.rounds += usize::from(!try_three);
         let mut changed = false;
         for b in 0..model.blocks() {
             if !search.charge(budget, 1) {
@@ -522,37 +597,29 @@ fn insert_bounded(
                     })
                     .collect::<Result<Vec<_>, Refusal>>()?;
                 let at = b * model.destinations();
-                for left in 0..model.destinations() {
-                    for right in left..model.destinations() {
-                        if !search.charge(budget, model.resources().saturating_add(1)) {
-                            break 'periods;
-                        }
-                        search.trials += 1;
-                        let Some(x) = fraction(model, b, left, right, &room, scale)? else {
-                            continue;
-                        };
-                        let value = (i128::from(model.values[at + left]) * (scale - x))
-                            .checked_add(i128::from(model.values[at + right]) * x)
-                            .ok_or_else(overflow)?;
-                        let gain = value.checked_mul(i128::from(factor)).ok_or_else(overflow)?;
-                        if gain <= best.as_ref().map_or(0, |m| m.gain) {
-                            continue;
-                        }
-                        let mut routes = Vec::with_capacity(2);
-                        for (d, q) in [(left, scale - x), (right, x)] {
-                            if q > 0 {
-                                routes.push((d as u32, i64::try_from(q).map_err(|_| overflow())?));
-                            }
-                        }
+                let mut consider = |allocation: &[(usize, i128)]| -> Result<(), Refusal> {
+                    let weighted = |row: &[i64]| {
+                        allocation.iter().try_fold(0_i128, |total, &(d, q)| {
+                            total
+                                .checked_add(i128::from(row[at + d]) * q)
+                                .ok_or_else(overflow)
+                        })
+                    };
+                    let value = weighted(&model.values)?;
+                    let gain = value.checked_mul(i128::from(factor)).ok_or_else(overflow)?;
+                    if gain > best.as_ref().map_or(0, |m| m.gain) {
+                        let routes = allocation
+                            .iter()
+                            .filter(|&&(_, q)| q > 0)
+                            .map(|&(d, q)| {
+                                Ok((d as u32, i64::try_from(q).map_err(|_| overflow())?))
+                            })
+                            .collect::<Result<_, Refusal>>()?;
                         let uses = model
                             .uses
                             .iter()
-                            .map(|row| {
-                                (i128::from(row[at + left]) * (scale - x))
-                                    .checked_add(i128::from(row[at + right]) * x)
-                                    .ok_or_else(overflow)
-                            })
-                            .collect::<Result<Vec<_>, Refusal>>()?;
+                            .map(|row| weighted(row))
+                            .collect::<Result<_, _>>()?;
                         best = Some(Move {
                             period: to,
                             routes,
@@ -560,6 +627,33 @@ fn insert_bounded(
                             uses,
                             gain,
                         });
+                    }
+                    Ok(())
+                };
+                if try_three {
+                    three_destination_trials(
+                        model,
+                        b,
+                        &room,
+                        scale,
+                        &mut search,
+                        budget,
+                        consider,
+                    )?;
+                    if search.work_exhausted {
+                        break 'periods;
+                    }
+                } else {
+                    for left in 0..model.destinations() {
+                        for right in left..model.destinations() {
+                            if !search.charge(budget, model.resources().saturating_add(1)) {
+                                break 'periods;
+                            }
+                            search.trials += 1;
+                            if let Some(x) = fraction(model, b, left, right, &room, scale, 0)? {
+                                consider(&[(left, scale - x), (right, x)])?;
+                            }
+                        }
                     }
                 }
             }
@@ -571,6 +665,7 @@ fn insert_bounded(
                 }
                 search.after = search.after.checked_add(next.gain).ok_or_else(overflow)?;
                 search.insertions += 1;
+                search.three_destination_insertions += usize::from(next.routes.len() == 3);
                 periods[b] = Some(next.period);
                 for (destination, fraction) in next.routes {
                     assignments.push(candidate::DestinationShare {
@@ -589,7 +684,11 @@ fn insert_bounded(
                 break 'rounds;
             }
         }
-        if !changed {
+        if changed {
+            try_three = false;
+        } else if !try_three && max_destinations == 3 {
+            try_three = true;
+        } else {
             break;
         }
     }

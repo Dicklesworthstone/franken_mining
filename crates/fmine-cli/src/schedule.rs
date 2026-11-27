@@ -29,7 +29,7 @@ pub const ROBOT_DOCS_JSON: &str = concat!(
     r#""input":"MineLib PCPSP and PREC text; optional four-column block/destination/period/fraction solution; each input at most 1 GiB and SHA-256 bound","#,
     r#""scales":"--decimals and --use-decimals default6; --share-decimals default9; all 0..9. Values refuse excess precision unless --round; resource uses round up and limits down; fractions never round","#,
     r#""method":"TopoSort, period/destination local search with joint whole-route moves and alternative-route insertions, then exact fractional polishing of initial and improved whole schedules using bounded pricing directions. Fractional polishing preserves mining periods and is not a destination-LP optimum. The best split incumbent, including an imported candidate, receives single-block and atomic two-block common-period moves preserving every destination fraction and the mined set. All affected signed rows and external precedence must remain feasible; larger groups, different pair target periods and temporary loss/infeasibility are not searched. The subsequent joint fractional pass is described separately below. Final feasibility and value are independently checked, and the global full-model Lagrangian upper bound is replayed from its prices","#,
-    r#""fractional_insertions":"For positive --rounds, search unmined predecessor-ready blocks even from an empty incumbent. Every period and destination pair is checked against exact signed resource rows on the declared share grid; only a complete feasible block with strictly positive discounted gain is inserted. Existing assignments are preserved. Nontrivial precedence cycles, loss-making prerequisite bundles, simultaneous block admission and three-or-more-route insertions are outside this bounded neighborhood","#,
+    r#""fractional_insertions":"For positive --rounds, search unmined predecessor-ready blocks even from an empty incumbent. Every period and destination pair is checked against exact signed resource rows. If pair insertion stalls, the same round tries triples using up to 101 samples of the last destination's necessary share interval and exact grid optimization of the remaining pair. Only complete feasible blocks with strictly positive discounted gain are inserted. Existing assignments are preserved. Nontrivial precedence cycles, loss-making prerequisite bundles, simultaneous block admission and allocations across four or more destinations are outside this bounded search","#,
     r#""joint_fractional_moves":"After insertion, for positive --rounds and a nonempty incumbent, search each mined block's period and every destination pair together, including same-period rerouting. Exact signed resource inequalities determine an inclusive interval of integer fractions on the declared decimal grid. Only strict exact gains are retained. Both vacated and receiving periods and both precedence directions remain feasible. The mined set and original candidate assessment are preserved; each moved block uses at most two destinations. Existing larger splits remain unless a tested pair improves them. No global optimality is inferred","#,
     r#""lp_guidance":"Opt-in --lp-guidance solves the relaxation with PDLP, fixed tolerance1e-6 and one worker. --lp-iterations1..1000000 default100000 requires --lp-guidance. Six threshold/release starts are searched and fractionally polished; duplicate starts/seeds are reused. Only a strict exact improvement replaces the baseline or external split. Iteration-limit shares are admitted as guidance after finite[0,1] checks; row feasibility and the LP objective are never trusted. Status optimal describes the LP stopping rule, not plan optimality. An empty LP scope skips the solver. Numerical infeasibility refuses because the empty schedule is feasible","#,
     r#""work":"--rounds0..1000 default20; --bound-steps1..4096 default64; fractional pricing at most256 columns and1024 master steps per period/seed. Fixed-fraction period search, exact block insertion and joint fractional period/route search each share --rounds and each have a separate262144 work-unit limit. Fixed-fraction pairs consider at most64 following mined blocks in ID order. Exhaustion retains every complete feasible improvement. Zero rounds disables both period searches, exact block insertion and joint rerouting. LP guidance adds at most6 whole searches and12 fractional passes, with preallocation limits1000000 columns/full-model block-period cells,2000000 rows and8000000 sparse entries","#,
@@ -237,18 +237,20 @@ fn fractional_insertion_report(plan: &planning::Plan, denominator: i128) -> (Str
     };
     let work_limit = pcpsp::fractional::joint::WORK;
     let json = format!(
-        ",\"fractional_insertion_search\":{{\"seed_origin\":\"{}\",\"before\":{},\"after\":{},\"rounds\":{},\"insertions\":{},\"trials\":{},\"work\":{},\"work_limit\":{work_limit},\"work_exhausted\":{},\"existing_assignments_preserved\":true,\"maximum_destinations_per_inserted_block\":2}}",
+        ",\"fractional_insertion_search\":{{\"seed_origin\":\"{}\",\"before\":{},\"after\":{},\"rounds\":{},\"insertions\":{},\"three_destination_insertions\":{},\"trials\":{},\"work\":{},\"work_limit\":{work_limit},\"work_exhausted\":{},\"existing_assignments_preserved\":true,\"maximum_destinations_per_inserted_block\":{}}}",
         plan.insertion_seed_origin,
         ratio(s.before, denominator),
         ratio(s.after, denominator),
         s.rounds,
         s.insertions,
+        s.three_destination_insertions,
         s.trials,
         s.work,
         s.work_exhausted,
+        s.maximum_destinations_per_inserted_block,
     );
     let markdown = format!(
-        "\nExact block insertion from `{}`: {} complete blocks added over {} rounds and {} trials, using {} of {work_limit} work units (budget exhausted: {}). Exact value {}/{denominator} → {}/{denominator}. Existing assignments stay unchanged; every inserted block satisfies precedence and all signed resource limits using at most two destinations on the declared decimal grid. This bounded neighborhood does not jointly admit prerequisite bundles or certify a global optimum.\n",
+        "\nExact block insertion from `{}`: {} complete blocks added over {} rounds and {} trials, using {} of {work_limit} work units (budget exhausted: {}). Exact value {}/{denominator} → {}/{denominator}. Three-destination insertions: {}. Existing assignments stay unchanged. Every inserted block satisfies precedence and all signed resource limits on the declared decimal grid. The search is bounded and the full-model upper bound is reported separately.\n",
         plan.insertion_seed_origin,
         s.insertions,
         s.rounds,
@@ -257,6 +259,7 @@ fn fractional_insertion_report(plan: &planning::Plan, denominator: i128) -> (Str
         s.work_exhausted,
         s.before,
         s.after,
+        s.three_destination_insertions,
     );
     (json, markdown)
 }

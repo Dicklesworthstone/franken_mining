@@ -58,7 +58,7 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
     - The limits move into the objective at prices `μ[r][t] ≥ 0`. What is left is one maximum closure on the time-expanded graph, which `pitflow::solve` solves and certifies exactly: node `t·n + b`, arcs to the blocks `b` requires in period `t` and to `(t + 1)·n + b`.
     - Weights are `value[b] · (F_t − F_{t+1}) − Σ_r use[r][b] · (μ[r][t] − μ[r][t+1])`, at the search's integer factors `F`. Adding `Σ μ · limit` to the closure gives a bound, in `i128`, on every schedule's discounted value in the objective `search::improve` maximises.
     - Weights past `pitflow`'s 2⁶² guard are divided by the least power of two that brings them under it, rounded up. The bound stays valid and loosens by less than one unit of that power per node.
-    - `lagrangian_bound` moves the prices by Polyak subgradient steps toward a target, such as the incumbent's value, and halves the step after `STALL` steps without a better bound. It keeps the least bound and every step's.
+    - `lagrangian_bound` moves the prices by Polyak subgradient steps toward a target, such as the incumbent's value, and halves the step after `STALL` steps without a better bound. It keeps the least bound and every step's. DESIGN (bd-6rf8): for multi-destination models, a price at zero excludes the component of the search direction that would make it negative. The selected integer prices still receive the same exact replay.
     - At its minimum over the prices the bound is the LP relaxation's optimum, since the closure polytope is integral. The step rule is not proved to get there.
 
 `fmine plan pit` (`fmine-cli`, `bd-ip99`, `bd-nq06`) calls `minelib::parse`, `solve`, `verify` and, with `--candidate`, `candidate::parse_ids` and `candidate::check`. `fmine-io`'s `omf::pit::PitModel` (bd-joiv) calls `slope::slope_arcs`, `solve` and `shells::nested_shells` on OMF block models. It also calls `toposort::greedy`, `toposort::search::discount_factors` and `toposort::search::improve` (bd-fr8x) to schedule OMF block models under capacities, and `toposort::lp`'s `relaxation`, `Shares`, `starts` and `incumbent` (bd-djb7), solving the relaxation with fmine-lp's PDLP in between. `fmine plan schedule` now calls `toposort::pcpsp::planning` for checked incumbents, exact external destination splits and replayed global Lagrangian bounds. The MineLib harnesses in `crates/xtask/tests/` call `toposort::lp` and `toposort::pcpsp::lp`, and `cpit_schedule.rs` reads MineLib's schedules through `cpit::parse_solution` and writes its own with `write_solution` (bd-3l5o). `cpit_schedule.rs` also runs `toposort::lp::lagrangian_bound` when asked (bd-oq7d). Bienstock–Zuckerberg and the stochastic layer remain later slices.
@@ -157,6 +157,10 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
   independent tiny-model enumeration; the CLI oracle retains the original imported-candidate receipt.
 - DESIGN (BD-252/253, plan §15.6): `toposort::pcpsp::fractional::joint::insert` admits complete unmined
   blocks using the same exact two-destination fraction interval, including from an empty incumbent.
+  When a round finds no one- or two-destination insertion, it also tries triples. Each resource row
+  bounds the third share using its lower use of the other two routes. At up to 101 native grid points
+  across the intersected interval, the exact pair interval determines the remaining shares. Wide
+  intervals are sampled and feasible three-way allocations may be missed.
   All non-self predecessors must already be mined no later than the proposed period; both signed
   row bounds and the declared decimal lattice are enforced. Existing assignments remain unchanged.
   Only strict positive discounted gains enter, with deterministic block/period/pair order. Each pass
@@ -164,10 +168,10 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
   Both planner entry points run it before joint rerouting for positive rounds. `insertion_seed_origin`
   and `fractional_insertions` retain the immediate seed and counters; a strict gain selects
   `fractional_insertion`. The final independent schedule check and full-model bound still apply.
-  Nontrivial cycles, loss-making prerequisite bundles, simultaneous admission and new allocations
-  across three or more destinations are outside this neighborhood. The independent CLI oracle
-  enumerates a split-only feasible block, checks signed rows, prerequisite ordering, decimal-grid
-  impossibility and zero-round opt-out without requiring an external candidate.
+  Nontrivial cycles, loss-making prerequisite bundles, simultaneous admission and allocations across
+  four or more destinations are outside this neighborhood. The independent CLI oracle enumerates
+  two- and three-destination split-only blocks and checks signed rows, prerequisite ordering,
+  decimal-grid impossibility and zero-round opt-out using an empty internal start.
 - DESIGN (BD-252/253, plan §15.6): `toposort::pcpsp::fractional::joint::improve` searches each mined
   block's period and exact allocation between every destination pair, keeping other blocks fixed.
   For a share `x` of the second destination, every resource row is `a*x <= b`; positive `a` gives an
@@ -680,7 +684,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
   - `check` lives in this crate beside `greedy`, not in the separate `fmine-verify` crate plan §15.4 names. It shares no code with `greedy` beyond the problem type.
   - The LP bridge (`bd-ubzs`) formulates the relaxation and reads its solution back, but does not solve it: `fmine-lp` is in the same layer as this crate, and the topology allows no edge between them. The caller solves it. In addition to the MineLib harnesses and OMF adapter, `fmine plan schedule --lp-guidance` now solves the PCPSP relaxation with bounded PDLP work and passes its advisory shares to `planning::solve_with_guidance`.
   - `fmine plan schedule` exposes PCPSP scheduling, automatic fractional destination improvements, exact external candidate checks and optional LP-guided mining periods. LP-guided and baseline mining sets are still heuristic whole-block starts; the bounded destination polishing does not jointly optimize fractional routing with periods. No stochastic search mode is exposed, and a tighter LP stopping tolerance is not promised to yield a better incumbent.
-  - The Lagrangian bound (`bd-oq7d`) uses plain Polyak subgradient steps, not a bundle method. It stalls near the LP optimum once its step has halved enough: on kd, 1,000 steps lowered the bound by 8.9, or 2×10⁻⁸ of it, below the 200-step bound, in 499 s against 79 s. It bounds CPIT only. PCPSP's destinations and blend rows are not relaxed this way. Each step solves a closure on `n · T` nodes from scratch, with no warm start between steps. It bounds the integer-factor objective, so comparing it with PDLP's `f64`-factor bounds is approximate (factors differ by under 2⁻⁴⁰ relative).
+  - The Lagrangian bound (`bd-oq7d`, `bd-6rf8`) uses Polyak subgradient steps. It can stall as its step shrinks: on CPIT kd, 1,000 steps lowered the bound by 8.9, or 2×10⁻⁸ of it, below the 200-step bound, in 499 s against 79 s. Each step solves a closure on `n · T` nodes from scratch. It bounds the integer-factor objective, so comparison with PDLP's `f64`-factor bounds is approximate (factors differ by under 2⁻⁴⁰ relative).
 - `pitflow::candidate` reads a plain id list, `cpit::parse_solution` reads MineLib's whole-block CPIT format, and `pcpsp::candidate::parse_solution` reads exact split-destination PCPSP rows. Which vendor formats (Whittle, Deswik, COMET) should be read is OPEN-PUSH-4. An OMF schedule comes in through `fmine-io`'s `PitModel::periods` and `candidate_schedule` instead (bd-jfg4), which call `check` and `improve`. The candidate check was built ahead of the owner's answer to OPEN-PUSH-1, on its recommended answer (data files only, no linked code); it is removed if the owner rules otherwise.
 - Slope arcs have no external gate. MineLib's UPIT files come with their arcs already made, and the workspace holds no geotechnical slope data. The slopes in the tests are invented.
 - Slope arcs cover regular grids only: no sub-blocks, rotated grids, or slopes that vary with depth inside a domain.

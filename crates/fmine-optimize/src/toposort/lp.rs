@@ -757,6 +757,17 @@ pub(crate) fn bound(
     let mut direction: Option<Vec<Vec<f64>>> = None;
     let mut history = Vec::with_capacity(steps);
     let mut best: Option<(i128, Vec<Vec<i64>>)> = None;
+    // DESIGN (bd-6rf8): A slack row at zero price cannot move farther down.
+    // Exclude that outward direction before sizing a multi-destination step:
+    // a large signed blending credit would otherwise drown out binding rows.
+    // Retain the single-destination price trajectory and its CPIT parity.
+    let project = |price: f64, gradient: f64| {
+        if p.destinations > 1 && price == 0.0 {
+            gradient.min(0.0)
+        } else {
+            gradient
+        }
+    };
     for _ in 0..steps {
         if prices
             .iter()
@@ -797,10 +808,12 @@ pub(crate) fn bound(
             .iter()
             .zip(&v.used)
             .zip(&scale)
-            .map(|((caps, used), &s)| {
+            .zip(&prices)
+            .map(|(((caps, used), &s), prices)| {
                 caps.iter()
                     .zip(used)
-                    .map(|(&c, &u)| (i128::from(c) - u) as f64 / s)
+                    .zip(prices)
+                    .map(|((&c, &u), &mu)| project(mu, (i128::from(c) - u) as f64 / s))
                     .collect()
             })
             .collect();
@@ -819,14 +832,18 @@ pub(crate) fn bound(
                 0.0
             }
         });
-        let d: Vec<Vec<f64>> = match &direction {
-            Some(prev) => slack
-                .iter()
-                .zip(prev)
-                .map(|(g, q)| g.iter().zip(q).map(|(x, y)| x + beta * y).collect())
-                .collect(),
-            None => slack,
-        };
+        let mut d = slack;
+        if let Some(prev) = &direction {
+            for ((g, &previous), &mu) in d
+                .iter_mut()
+                .flatten()
+                .zip(prev.iter().flatten())
+                .zip(prices.iter().flatten())
+            {
+                // Deflection can point a row back out of the price domain.
+                *g = project(mu, *g + beta * previous);
+            }
+        }
         let norm = dot(&d, &d);
         if norm <= 0.0 || margin < 1.0 {
             break;
