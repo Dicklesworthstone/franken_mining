@@ -1075,9 +1075,8 @@ fn student_t_quantile_90(nu: f64) -> f64 {
     0.5 * (lo + hi)
 }
 
-/// Online conjugate Normal-Inverse-Gamma sufficient statistics for dimensionless standardized
-/// innovation residuals `z = (y - mu_raw) / sigma_raw`, producing scale-equivariant,
-/// heteroscedastic finite-sample Student-t 80% predictive intervals.
+/// Online sufficient statistics for dimensionless innovations `z = (y - mu_raw) / sigma_raw`.
+/// The next forecast's raw scale maps the standardized Student-t interval back to physical units.
 #[derive(Debug, Clone)]
 struct ConjugateResidualSegment {
     prior_kappa: f64,
@@ -1127,22 +1126,34 @@ impl ConjugateResidualSegment {
     }
 
     fn predict_80(&self, raw: RawForecast) -> Result<PredictiveInterval80, Refusal> {
+        // DESIGN (bd-9mk9): Use the declared proper prior for zero or one residual. Once the
+        // segment has two residuals, use its mean and scatter with a flat location prior and
+        // a small variance ridge. The ridge gives repeated residuals positive predictive scale.
+        const VARIANCE_RIDGE_SHAPE: f64 = 0.01;
         let nf = self.n as f64;
-        let kappa_n = self.prior_kappa + nf;
-        let mu_z = (nf * self.mean_z) / kappa_n;
-        let alpha_n = self.prior_alpha + 0.5 * nf;
-        let beta_0 = self.prior_alpha * self.prior_scale_mult * self.prior_scale_mult;
-        let beta_n = beta_0
-            + 0.5 * self.m2_z
-            + 0.5 * (self.prior_kappa * (nf / kappa_n)) * (self.mean_z * self.mean_z);
-        let pred_var_z = (beta_n / alpha_n) * ((kappa_n + 1.0) / kappa_n);
+        let prior_var = self.prior_scale_mult * self.prior_scale_mult;
+        let (mu_z, pred_var_z, nu) = if self.n < 2 {
+            let kappa_n = self.prior_kappa + nf;
+            let mu_z = (nf * self.mean_z) / kappa_n;
+            let alpha_n = self.prior_alpha + 0.5 * nf;
+            let beta_0 = self.prior_alpha * prior_var;
+            let beta_n = beta_0
+                + 0.5 * self.m2_z
+                + 0.5 * (self.prior_kappa * (nf / kappa_n)) * (self.mean_z * self.mean_z);
+            let pred_var_z = (beta_n / alpha_n) * ((kappa_n + 1.0) / kappa_n);
+            (mu_z, pred_var_z, 2.0 * alpha_n)
+        } else {
+            let nu = (nf - 1.0) + 2.0 * VARIANCE_RIDGE_SHAPE;
+            let s2 = (self.m2_z + 2.0 * VARIANCE_RIDGE_SHAPE * prior_var) / nu;
+            let pred_var_z = s2 * (1.0 + 1.0 / nf);
+            (self.mean_z, pred_var_z, nu)
+        };
         if !(pred_var_z.is_finite() && pred_var_z > 0.0) {
             return Err(Refusal::new(
                 RefusalCode::NumericalCertificateFailed207,
                 "LayeredRecalibrator predictive variance is non-finite or non-positive",
             ));
         }
-        let nu = 2.0 * alpha_n;
         let t_crit = student_t_quantile_90(nu);
         let half_width = t_crit * det::sqrt(pred_var_z) * raw.std_dev;
         let center = raw.mean + mu_z * raw.std_dev;
@@ -1210,7 +1221,7 @@ fn validate_raw_forecast(raw: RawForecast) -> Result<(), Refusal> {
 ///   correctly specified control mines, `GATE-PLUMB-E5`).
 /// - After L5 alarms: opens a fresh post-alarm discrepancy segment strictly from post-alarm
 ///   resolutions (`t > t_alarm`, avoiding stopping-time selection bias and pre-fault staleness)
-///   and emits finite-sample conjugate Student-t 80% intervals alongside raw L1/L2 intervals.
+///   and emits finite-sample Student-t 80% intervals alongside raw L1/L2 intervals.
 #[derive(Debug, Clone)]
 pub struct LayeredRecalibrator {
     monitor: DualSurpriseMonitor,
@@ -1309,7 +1320,7 @@ impl LayeredRecalibrator {
 }
 
 /// Unsegmented single global conjugate posterior baseline (`GATE-PLUMB-E3`, plan §9.2):
-/// uses the exact same Normal-Inverse-Gamma Student-t likelihood/prior as [`LayeredRecalibrator`]
+/// uses the same Student-t predictive rule as [`LayeredRecalibrator`]
 /// but pools all historical resolutions without alarm segmentation.
 #[derive(Debug, Clone)]
 pub struct GlobalPosteriorBaseline {
@@ -1499,6 +1510,75 @@ mod tests {
                 ForecastOutcome(1e200),
             )
             .expect("dimensionless z=10 succeeds");
+    }
+
+    #[test]
+    fn test_dispersion_recalibration_uses_segment_scatter_after_two_resolutions() {
+        let cfg = LayeredConfig {
+            monitor: DualSurpriseConfig {
+                eproc_alpha: 0.04,
+                cusum_k: 0.5,
+                cusum_h: 8.5,
+                alarm_scale: 1.5,
+            },
+            prior_kappa: 0.25,
+            prior_alpha: 1.0,
+            prior_scale_mult: 1.0,
+        };
+        let raw = RawForecast {
+            mean: 10.0,
+            std_dev: 2.0,
+        };
+        let mut layered = LayeredRecalibrator::new(cfg).expect("layered stack");
+        let mut global = GlobalPosteriorBaseline::new(cfg).expect("global baseline");
+        let alarm = layered
+            .observe_resolution(raw, ForecastOutcome(42.0))
+            .expect("planted alarm");
+        assert_eq!(alarm.first_any_alarm, Some(1));
+        let check = |layered: &LayeredRecalibrator,
+                     global: &GlobalPosteriorBaseline,
+                     count,
+                     center: f64,
+                     width: f64| {
+            let point = layered.predict(raw).expect("post-alarm interval");
+            assert!(point.alarmed);
+            assert_eq!(point.post_alarm_resolutions, count);
+            assert_eq!(
+                point.published_interval_80,
+                global.predict(raw).expect("comparator interval")
+            );
+            assert!((point.published_interval_80.center - center).abs() < 1e-12);
+            assert!((point.published_interval_80.half_width - width).abs() < 1e-10);
+        };
+
+        // FACT: Known widths integrate the Student-t density over the central 0.8 mass.
+        // For z = [-1, 3], mean = 1, M2 = 8 and the predictive scale squared is 8.02 * 1.5 / 1.02.
+        check(&layered, &global, 0, 10.0, 8.432_740_427_116);
+        layered
+            .observe_resolution(raw, ForecastOutcome(8.0))
+            .expect("first post-alarm residual");
+        global
+            .observe_resolution(raw, ForecastOutcome(8.0))
+            .expect("first comparator residual");
+        check(&layered, &global, 1, 8.4, 3.763_250_015_529);
+
+        let mut repeated = layered.clone();
+        let mut repeated_global = global.clone();
+        repeated
+            .observe_resolution(raw, ForecastOutcome(8.0))
+            .expect("identical residual");
+        repeated_global
+            .observe_resolution(raw, ForecastOutcome(8.0))
+            .expect("identical comparator residual");
+        check(&repeated, &repeated_global, 2, 8.0, 1.033_754_476_646);
+
+        layered
+            .observe_resolution(raw, ForecastOutcome(16.0))
+            .expect("dispersed residual");
+        global
+            .observe_resolution(raw, ForecastOutcome(16.0))
+            .expect("dispersed comparator residual");
+        check(&layered, &global, 2, 12.0, 20.700_917_262_581);
     }
 
     #[test]
