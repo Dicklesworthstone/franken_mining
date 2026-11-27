@@ -1,0 +1,13 @@
+# Capture record (§33.2, GATE-ORACLE-01, BD-232, FD-FJ-00) for fj_ad_gradients.txt:
+# 10 log-density and reverse-mode VJP gradient evaluations across 5 mining/Bayesian models
+# computed by pinned frankenjax@fa93fb775e1cd73471cd9b2b3e3a014762d1066c (fj-core, fj-lax, fj-ad)
+# on nightly-2026-08-31.
+oracle = "frankenjax (fj-core, fj-lax, fj-ad; value_and_grad_jaxpr)"
+version = "git:fa93fb775e1cd73471cd9b2b3e3a014762d1066c on rustc 1.100.0-nightly (nightly-2026-08-31)"
+platform = "x86_64-unknown-linux-gnu"
+inputs_digest = "sha256:8c834490ef09b4ca097ce8873637751d450277e761aa2a10f2657a0a62f9a432"
+outputs_digest = "sha256:866f0b911310d1046dbe56cfff96ff520de407d71e9879a40c47ea447db91b4b"
+command = "RUSTUP_TOOLCHAIN=nightly-2026-08-31 cargo run -q -j 2 -p fmine-fj-capture"
+captured_by = "coding agent (pinned frankenjax@fa93fb77 archive via RCH ovh-b; cross-checked by fmine-infer::ad::Tape and central FD)"
+date = "2026-11-27"
+licence = "MIT (FrankenJAX and FrankenMining repositories)"

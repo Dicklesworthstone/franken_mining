@@ -1,0 +1,18 @@
+[package]
+name = "fmine-infer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Lodestar Bayesian inference engine: BitwisePortable NUTS, bijectors, reverse-mode AD, and Vehtari R-hat/ESS certificates (BD-232)"
+
+[dependencies]
+fmine-core = { path = "../fmine-core" }
+fmine-evidence = { path = "../fmine-evidence" }
+
+[lints]
+workspace = true
