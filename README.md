@@ -1443,9 +1443,21 @@ retain the submitted source digest, exact ratios, the metal and currency units, 
 and the 100% project basis. The command refuses a declared feed grade whose contained metal exceeds
 the ore mass.
 
-The model assumes constant recovery and one product. It uses the supplied opportunity cost and capacities
-for the stated period. Balancing cut-offs, grade-dependent recovery, and an operative cut-off policy
-require further evidence.
+To use grade-dependent testwork, replace `recovery_fraction` with `recovery_curve`. Each knot
+declares `grade_per_dry_tonne` and `recovery_fraction`. The calculation interpolates **recovered
+metal per dry tonne** between strictly increasing grades. Recovered metal may plateau and must
+never decrease. The whole feed band must lie within the declared curve.
+
+```bash
+cargo run -p fmine-cli -- plan cutoff \
+  --input tests/planning/lane_recovery_curve.json --format markdown
+```
+
+In this synthetic example, the 0.30–0.33 g/t band straddles the market-limited grade of **29/90 g/t**.
+At a fixed 75% recovery it would clear the market limit throughout. If break-even lies outside the
+curve, the report says whether all supported grades clear or whether none do, with no extrapolated
+grade. The model covers one product and period with declared opportunity cost and capacities.
+Balancing cut-offs and an operative cut-off policy require further evidence.
 
 ### Generate and check production schedules with destination splits
 

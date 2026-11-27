@@ -21,12 +21,48 @@ pub struct LaneInputs {
     pub market_metal_units_per_period: Rat,
 }
 
+/// Lane economics in one currency and one period. Recovery is supplied
+/// separately as a constant fraction or a grade-dependent response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LaneTerms {
+    pub price_per_metal_unit: Rat,
+    pub selling_cost_per_metal_unit: Rat,
+    pub milling_cost_per_dry_tonne: Rat,
+    pub fixed_cost_per_period: Rat,
+    pub opportunity_cost_per_period: Rat,
+    pub mill_dry_tonnes_per_period: Rat,
+    pub market_metal_units_per_period: Rat,
+}
+
 /// Contained metal units per dry metric tonne under each limiting assumption.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LaneCutoffs {
-    pub mine: Rat,
-    pub mill: Rat,
-    pub market: Rat,
+pub struct LaneCutoffs<T = Rat> {
+    pub mine: T,
+    pub mill: T,
+    pub market: T,
+}
+
+/// Economic crossing over the closed support of a recovery curve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CurveCutoff {
+    AtGrade(Rat),
+    AllSupportedGradesClear,
+    NoSupportedGradeClears,
+}
+
+/// Bound on the number of declared knots for one response.
+pub const MAX_RECOVERY_KNOTS: usize = 128;
+
+/// A monotone piecewise-linear curve of recovered metal per dry tonne.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveryCurve {
+    knots: Vec<RecoveryKnot>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RecoveryKnot {
+    grade: Rat,
+    recovered: Rat,
 }
 
 /// Comparison under the explicit rule that equality clears the threshold.
@@ -48,6 +84,96 @@ fn arithmetic() -> Refusal {
     )
 }
 
+fn compare(left: Rat, right: Rat) -> Result<Ordering, Refusal> {
+    left.checked_cmp(right).map_err(|_| arithmetic())
+}
+
+impl RecoveryCurve {
+    /// Convert (contained grade, recovery fraction) knots into recovered grade.
+    /// Interpolation uses recovered grade so a segment remains mass-conserving.
+    ///
+    /// # Errors
+    /// Refuses nonphysical knots, non-increasing contained grades, decreasing
+    /// recovered grades, unsupported knot counts and exact arithmetic overflow.
+    pub fn new(points: &[(Rat, Rat)], max_grade: Rat) -> Result<Self, Refusal> {
+        if !(2..=MAX_RECOVERY_KNOTS).contains(&points.len()) {
+            return Err(domain("a recovery curve requires 2 to 128 knots"));
+        }
+        let mut knots: Vec<RecoveryKnot> = Vec::with_capacity(points.len());
+        for &(grade, fraction) in points {
+            if grade.signum() < 0 || compare(grade, max_grade)?.is_gt() {
+                return Err(domain(
+                    "recovery curve grades must fit within one dry tonne",
+                ));
+            }
+            if fraction.signum() < 0 || fraction.num() > fraction.den() {
+                return Err(domain("curve recovery fractions must be in [0, 1]"));
+            }
+            let recovered = grade.checked_mul(fraction).map_err(|_| arithmetic())?;
+            if let Some(previous) = knots.last() {
+                if !compare(grade, previous.grade)?.is_gt() {
+                    return Err(domain("recovery curve grades must strictly increase"));
+                }
+                if compare(recovered, previous.recovered)?.is_lt() {
+                    return Err(domain("recovered metal per dry tonne must not decrease"));
+                }
+            }
+            knots.push(RecoveryKnot { grade, recovered });
+        }
+        Ok(Self { knots })
+    }
+
+    /// First and last admitted contained grades, both inclusive.
+    pub fn support(&self) -> (Rat, Rat) {
+        (self.knots[0].grade, self.knots[self.knots.len() - 1].grade)
+    }
+
+    /// Admit a feed band only if its entire support is covered by the curve.
+    ///
+    /// # Errors
+    /// Refuses reversed or negative bands and any extrapolation.
+    pub fn check_band(&self, lower: Rat, upper: Rat) -> Result<(), Refusal> {
+        check_band(lower, upper)?;
+        let (first, last) = self.support();
+        if compare(lower, first)?.is_lt() || compare(upper, last)?.is_gt() {
+            return Err(Refusal::new(
+                RefusalCode::OutsideAoa203,
+                "feed-grade band extends outside the recovery curve's declared grade range",
+            ));
+        }
+        Ok(())
+    }
+
+    fn cutoff(&self, cost: Rat, margin: Rat) -> Result<CurveCutoff, Refusal> {
+        let required = cost.checked_div(margin).map_err(|_| arithmetic())?;
+        let first = self.knots[0];
+        match compare(required, first.recovered)? {
+            Ordering::Less => return Ok(CurveCutoff::AllSupportedGradesClear),
+            Ordering::Equal => return Ok(CurveCutoff::AtGrade(first.grade)),
+            Ordering::Greater => {}
+        }
+        for pair in self.knots.windows(2) {
+            let (left, right) = (pair[0], pair[1]);
+            if compare(required, right.recovered)?.is_gt() {
+                continue;
+            }
+            // The first hit has a strictly positive rise even when subsequent
+            // knots form a plateau. Equality returns its leftmost crossing.
+            if required == right.recovered {
+                return Ok(CurveCutoff::AtGrade(right.grade));
+            }
+            let grade = required
+                .checked_sub(left.recovered)
+                .and_then(|rise| rise.checked_div(right.recovered.checked_sub(left.recovered)?))
+                .and_then(|part| part.checked_mul(right.grade.checked_sub(left.grade)?))
+                .and_then(|offset| left.grade.checked_add(offset))
+                .map_err(|_| arithmetic())?;
+            return Ok(CurveCutoff::AtGrade(grade));
+        }
+        Ok(CurveCutoff::NoSupportedGradeClears)
+    }
+}
+
 impl LaneInputs {
     /// Evaluate all three limiting grades as exact ratios.
     ///
@@ -55,6 +181,51 @@ impl LaneInputs {
     /// Refuses undeclared economic viability (nonpositive net margins), invalid
     /// recovery, capacities or costs, and arithmetic outside the exact range.
     pub fn evaluate(self) -> Result<LaneCutoffs, Refusal> {
+        LaneTerms {
+            price_per_metal_unit: self.price_per_metal_unit,
+            selling_cost_per_metal_unit: self.selling_cost_per_metal_unit,
+            milling_cost_per_dry_tonne: self.milling_cost_per_dry_tonne,
+            fixed_cost_per_period: self.fixed_cost_per_period,
+            opportunity_cost_per_period: self.opportunity_cost_per_period,
+            mill_dry_tonnes_per_period: self.mill_dry_tonnes_per_period,
+            market_metal_units_per_period: self.market_metal_units_per_period,
+        }
+        .evaluate_constant(self.recovery_fraction)
+    }
+}
+
+impl LaneTerms {
+    /// Evaluate with one fixed recovery fraction.
+    ///
+    /// # Errors
+    /// Refuses invalid economics, out-of-domain recovery and exact overflow.
+    pub fn evaluate_constant(self, recovery: Rat) -> Result<LaneCutoffs, Refusal> {
+        if recovery.signum() <= 0 || recovery.num() > recovery.den() {
+            return Err(domain("recovery must be a fraction in (0, 1]"));
+        }
+        self.map_limits(|cost, margin| {
+            margin
+                .checked_mul(recovery)
+                .and_then(|denom| cost.checked_div(denom))
+                .map_err(|_| arithmetic())
+        })
+    }
+
+    /// Evaluate the limiting grades within the curve's declared support.
+    ///
+    /// # Errors
+    /// Refuses invalid economics or exact overflow.
+    pub fn evaluate_curve(
+        self,
+        curve: &RecoveryCurve,
+    ) -> Result<LaneCutoffs<CurveCutoff>, Refusal> {
+        self.map_limits(|cost, margin| curve.cutoff(cost, margin))
+    }
+
+    fn map_limits<T>(
+        self,
+        grade: impl Fn(Rat, Rat) -> Result<T, Refusal>,
+    ) -> Result<LaneCutoffs<T>, Refusal> {
         for (name, value) in [
             ("selling cost", self.selling_cost_per_metal_unit),
             ("milling cost", self.milling_cost_per_dry_tonne),
@@ -64,10 +235,6 @@ impl LaneInputs {
             if value.signum() < 0 {
                 return Err(domain(&format!("{name} must be nonnegative")));
             }
-        }
-        let recovery = self.recovery_fraction;
-        if recovery.signum() <= 0 || recovery.num() > recovery.den() {
-            return Err(domain("recovery must be a fraction in (0, 1]"));
         }
         if self.mill_dry_tonnes_per_period.signum() <= 0
             || self.market_metal_units_per_period.signum() <= 0
@@ -95,20 +262,14 @@ impl LaneInputs {
             ));
         }
         let cost = self.milling_cost_per_dry_tonne;
-        let mine_margin = margin.checked_mul(recovery).map_err(|_| arithmetic())?;
         let mill_cost = overhead
             .checked_div(self.mill_dry_tonnes_per_period)
             .and_then(|charge| cost.checked_add(charge))
             .map_err(|_| arithmetic())?;
-        let market_margin = market_margin
-            .checked_mul(recovery)
-            .map_err(|_| arithmetic())?;
         Ok(LaneCutoffs {
-            mine: cost.checked_div(mine_margin).map_err(|_| arithmetic())?,
-            mill: mill_cost
-                .checked_div(mine_margin)
-                .map_err(|_| arithmetic())?,
-            market: cost.checked_div(market_margin).map_err(|_| arithmetic())?,
+            mine: grade(cost, margin)?,
+            mill: grade(mill_cost, margin)?,
+            market: grade(cost, market_margin)?,
         })
     }
 }
@@ -118,10 +279,7 @@ impl LaneInputs {
 /// # Errors
 /// Refuses invalid bounds or arithmetic outside the exact range.
 pub fn screen_grade(lower: Rat, upper: Rat, threshold: Rat) -> Result<GradeScreen, Refusal> {
-    let compare = |left: Rat, right| left.checked_cmp(right).map_err(|_| arithmetic());
-    if lower.signum() < 0 || compare(lower, upper)? == Ordering::Greater {
-        return Err(domain("feed-grade band requires 0 <= lower <= upper"));
-    }
+    check_band(lower, upper)?;
     Ok(if compare(lower, threshold)? != Ordering::Less {
         GradeScreen::EntireBandClears
     } else if compare(upper, threshold)? == Ordering::Less {
@@ -131,12 +289,74 @@ pub fn screen_grade(lower: Rat, upper: Rat, threshold: Rat) -> Result<GradeScree
     })
 }
 
+fn check_band(lower: Rat, upper: Rat) -> Result<(), Refusal> {
+    if lower.signum() < 0 || compare(lower, upper)?.is_gt() {
+        return Err(domain("feed-grade band requires 0 <= lower <= upper"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn qty(s: &str) -> Rat {
         Rat::from_decimal_str(s).unwrap()
+    }
+
+    #[test]
+    fn curve_inverts_recovered_grade_and_keeps_the_first_plateau_crossing() {
+        let curve = RecoveryCurve::new(
+            &[
+                (qty("0.2"), qty("0.5")),
+                (qty("0.4"), qty("0.75")),
+                (qty("0.6"), qty("0.5")),
+            ],
+            qty("1"),
+        )
+        .unwrap();
+        let cases = [
+            ("0.09", CurveCutoff::AllSupportedGradesClear),
+            ("0.1", CurveCutoff::AtGrade(qty("0.2"))),
+            ("0.2", CurveCutoff::AtGrade(qty("0.3"))),
+            ("0.3", CurveCutoff::AtGrade(qty("0.4"))),
+            ("0.31", CurveCutoff::NoSupportedGradeClears),
+        ];
+        for (needed, expected) in cases {
+            assert_eq!(curve.cutoff(qty(needed), qty("1")).unwrap(), expected);
+        }
+        curve.check_band(qty("0.2"), qty("0.6")).unwrap();
+        assert_eq!(
+            curve.check_band(qty("0.3"), qty("0.61")).unwrap_err().code,
+            "FMINE-REF-203"
+        );
+        assert_eq!(
+            curve.check_band(qty("0.15"), qty("0.3")).unwrap_err().code,
+            "FMINE-REF-203"
+        );
+    }
+
+    #[test]
+    fn a_constant_recovery_curve_matches_legacy_limiting_grades_within_support() {
+        let curve = RecoveryCurve::new(
+            &[(qty("0"), qty("0.75")), (qty("1"), qty("0.75"))],
+            qty("1"),
+        )
+        .unwrap();
+        let terms = LaneTerms {
+            price_per_metal_unit: qty("100"),
+            selling_cost_per_metal_unit: qty("0"),
+            milling_cost_per_dry_tonne: qty("20"),
+            fixed_cost_per_period: qty("10"),
+            opportunity_cost_per_period: qty("10"),
+            mill_dry_tonnes_per_period: qty("2"),
+            market_metal_units_per_period: qty("2"),
+        };
+        let plain = terms.evaluate_constant(qty("0.75")).unwrap();
+        let curved = terms.evaluate_curve(&curve).unwrap();
+        assert_eq!(curved.mine, CurveCutoff::AtGrade(plain.mine));
+        assert_eq!(curved.mill, CurveCutoff::AtGrade(plain.mill));
+        assert_eq!(curved.market, CurveCutoff::AtGrade(plain.market));
     }
 
     fn example() -> LaneInputs {

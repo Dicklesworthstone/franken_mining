@@ -70,9 +70,11 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
 - **Allowed Module Families:** `["pitflow", "toposort", "plan_cert", "cutoff"]`
 
 ## 2. Inputs
-- `cutoff::LaneInputs` (DESIGN, BD-252, plan §15.6): one period, one metal unit, dry metric tonnes and a
-  common currency on one project basis. All eight economic and capacity quantities are exact rationals.
-  Recovery is constant and recovered metal is sold at the declared net metal price.
+- `cutoff::LaneTerms` (DESIGN, BD-252, plan §15.6): one period, one metal unit, dry metric tonnes and a
+  common currency on one project basis. Economics and capacity are exact rationals. The constant path
+  accepts an exact recovery fraction, including through `LaneInputs`. The curve path accepts 2–128
+  strictly increasing grade knots with physical recovery fractions. Recovered metal per tonne must
+  be nondecreasing and is interpolated linearly over the closed declared grade range.
 - `toposort::pcpsp::planning::solve`: a parsed PCPSP model, bounded `Options` (0–1,000 search rounds,
   1–4,096 bound steps, 0–9 share decimals), and an optional exact `candidate::SplitSchedule` at that
   scale. It builds a deterministic TopoSort start, improves periods/destinations, and automatically
@@ -217,8 +219,10 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
 - `cutoff::LaneCutoffs` returns all three exact limiting grades in contained metal units per dry metric
   tonne. `screen_grade` compares both ends of a declared grade band with one threshold, including equality
   on the clearing side. The CLI retains the source digest and basis and labels the scenario uncalibrated.
-  Invalid domains or exact-arithmetic overflow refuse. The pinned symbolic ratios are tested through
-  `fmine plan cutoff`. Balancing cut-offs and operative policy optimization remain open.
+  For a curve, the result gives the first supported grade reaching break-even or states whether all or
+  no supported grades clear. Screening a band that extends outside the curve refuses. Physical domains,
+  exact arithmetic, the unchanged constant ratios and the curve's exact crossing have direct controls.
+  Balancing cut-offs and operative policy optimization remain open.
 - `PitSolution`: `in_pit` (one flag per block), `value` (the pit's total, the maximum over all closed sets), `pit_size`, `arc_flow` (the certificate, one flow per arc in CSR order) and `stats` (`PitStats`: mergers, splits, relabels, largest label).
 - `verify(problem, in_pit, arc_flow)`: the pit's value if the certificate holds.
 - `NestedShells` provides:

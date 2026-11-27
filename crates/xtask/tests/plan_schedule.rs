@@ -86,6 +86,141 @@ fn lane_json(output: &std::process::Output) -> Json {
 }
 
 #[test]
+fn lane_recovery_curve_binary_distinguishes_exact_crossings_and_support_limits() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let input = "tests/planning/lane_recovery_curve.json";
+    let original = std::fs::read_to_string(root.join(input)).unwrap();
+    let result = lane(&root, input, "json");
+    let report = lane_json(&result);
+    assert!(result.status.success(), "{report:?}");
+    assert_eq!(result.stdout, lane(&root, input, "json").stdout);
+    let payload = report.get("payload").unwrap();
+    let digest = sha256(original.as_bytes()).to_hex();
+    assert_eq!(
+        payload
+            .get("source")
+            .unwrap()
+            .get("sha256")
+            .unwrap()
+            .as_str(),
+        Some(digest.as_str())
+    );
+    let support = payload.get("recovery_curve_support").unwrap();
+    assert_eq!(support.get("lower").unwrap().as_str(), Some("1/5"));
+    assert_eq!(support.get("upper").unwrap().as_str(), Some("3/5"));
+    let rows = payload.get("limiting_cutoffs").unwrap().as_array().unwrap();
+    // Between the first two knots recovered grade equals feed grade minus 0.1.
+    // The three required recovered grades are 20/100, 30/100 and 20/90.
+    let expected = [
+        ("3/10", "entire_band_clears"),
+        ("2/5", "entire_band_below"),
+        ("29/90", "straddles"),
+    ];
+    assert_eq!(rows.len(), expected.len());
+    for (row, (grade, screen)) in rows.iter().zip(expected) {
+        assert_eq!(row.get("cutoff_grade").unwrap().as_str(), Some(grade));
+        assert_eq!(
+            row.get("cutoff_status").unwrap().as_str(),
+            Some("within_support")
+        );
+        assert_eq!(row.get("feed_grade_screen").unwrap().as_str(), Some(screen));
+    }
+    let markdown = lane(&root, input, "markdown");
+    assert!(markdown.status.success());
+    assert!(
+        String::from_utf8(markdown.stdout)
+            .unwrap()
+            .contains("| market | 29/90 | Straddles |")
+    );
+
+    let scratch = std::env::temp_dir().join(format!(
+        "fmine-lane-recovery-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&scratch).unwrap();
+    let submit = |name: &str, text: &str| {
+        std::fs::write(scratch.join(name), text).unwrap();
+        lane_json(&lane(&scratch, name, "json"))
+    };
+    let (before_curve, _) = original.split_once("\"recovery_curve\":").unwrap();
+    let declared = before_curve.replace("\"0.3\"", "\"0.32\"");
+    let short = submit(
+        "short.json",
+        &format!(
+            r#"{declared}"recovery_curve": [
+            {{ "grade_per_dry_tonne": "0.32", "recovery_fraction": "0.75" }},
+            {{ "grade_per_dry_tonne": "0.36", "recovery_fraction": "0.75" }}
+        ]}}"#
+        ),
+    );
+    let rows = short
+        .get("payload")
+        .unwrap()
+        .get("limiting_cutoffs")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    for (row, (status, screen)) in rows.iter().zip([
+        ("all_supported_grades_clear", "entire_band_clears"),
+        ("no_supported_grade_clears", "entire_band_below"),
+        ("all_supported_grades_clear", "entire_band_clears"),
+    ]) {
+        assert_eq!(row.get("cutoff_grade"), Some(&Json::Null));
+        assert_eq!(row.get("cutoff_status").unwrap().as_str(), Some(status));
+        assert_eq!(row.get("feed_grade_screen").unwrap().as_str(), Some(screen));
+    }
+    let constant = submit(
+        "constant.json",
+        &format!(r#"{before_curve}"recovery_fraction":"0.75"}}"#),
+    );
+    let market = &constant
+        .get("payload")
+        .unwrap()
+        .get("limiting_cutoffs")
+        .unwrap()
+        .as_array()
+        .unwrap()[2];
+    assert_eq!(market.get("cutoff_grade").unwrap().as_str(), Some("8/27"));
+    assert_eq!(
+        market.get("feed_grade_screen").unwrap().as_str(),
+        Some("entire_band_clears")
+    );
+    assert!(market.get("cutoff_status").is_none());
+
+    for (index, (from, to, code)) in [
+        ("\"0.33\"", "\"0.61\"", "FMINE-REF-203"),
+        ("\"0.3\"", "\"0.19\"", "FMINE-REF-203"),
+        ("\"0.75\"", "\"0.1\"", "FMINE-REF-109"),
+        ("\"0.75\"", "\"1.1\"", "FMINE-REF-109"),
+        ("\"0.6\"", "\"0.4\"", "FMINE-REF-109"),
+        ("\"0.6\"", "\"1000001\"", "FMINE-REF-109"),
+        (
+            "\"recovery_curve\":",
+            "\"recovery_fraction\":\"0.75\",\"recovery_curve\":",
+            "FMINE-REF-107",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert!(original.contains(from));
+        let out = submit(
+            &format!("invalid-{index}.json"),
+            &original.replace(from, to),
+        );
+        assert_eq!(out.get("payload"), Some(&Json::Null));
+        assert_eq!(
+            out.get("refusal").unwrap().get("code").unwrap().as_str(),
+            Some(code)
+        );
+    }
+}
+
+#[test]
 fn lane_cutoff_binary_replays_pinned_symbolic_ratios_and_grade_screens() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let input = "tests/planning/lane_cutoff.json";
