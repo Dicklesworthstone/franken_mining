@@ -56,7 +56,7 @@ pub enum DrillError {
 }
 
 impl DrillError {
-    fn invalid(field: &str, detail: impl Into<String>) -> Self {
+    pub(crate) fn invalid(field: &str, detail: impl Into<String>) -> Self {
         Self::Invalid {
             field: field.to_string(),
             detail: detail.into(),
@@ -844,7 +844,7 @@ fn validate_position(field: &str, p: &Position) -> Result<(), DrillError> {
     check_non_negative(&format!("{field}.sigma_vertical_m"), p.sigma_vertical_m)
 }
 
-fn validate_collar(r: &Collar) -> Result<(), DrillError> {
+pub(crate) fn validate_collar(r: &Collar) -> Result<(), DrillError> {
     check_id("collar.hole_id", &r.hole_id)?;
     check_text("collar.program", &r.program)?;
     if let Some(p) = &r.planned {
@@ -867,7 +867,7 @@ fn validate_collar(r: &Collar) -> Result<(), DrillError> {
     }
 }
 
-fn validate_survey(r: &Survey) -> Result<(), DrillError> {
+pub(crate) fn validate_survey(r: &Survey) -> Result<(), DrillError> {
     check_id("survey.survey_id", &r.survey_id)?;
     check_id("survey.hole_id", &r.hole_id)?;
     match (r.instrument, &r.orientation) {
