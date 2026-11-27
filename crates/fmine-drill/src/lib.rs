@@ -15,12 +15,14 @@
 //! guards twin-derived corrections (`G-TWIN`) and runs the RC smearing monitor. [`checks`] runs the campaign data
 //! checks: recovery–grade bias, data-generation comparison, in/out survey runs, collar against DTM, `qaqc_regime`
 //! per campaign, and the selection of `CommittedFlagged` results with their re-assay state.
+//! [`qaqc`] evaluates fixed CRM batches on declared SD bases, CANMET and a conditional bias interval.
 
 pub mod checks;
 pub mod composite;
 pub mod desurvey;
 pub mod join;
 pub mod lab;
+pub mod qaqc;
 pub mod records;
 mod stats;
 pub mod store;

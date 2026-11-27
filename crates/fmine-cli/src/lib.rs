@@ -9,6 +9,7 @@ pub mod cost;
 mod decision;
 mod doctor;
 pub mod drill;
+pub mod drill_qaqc;
 mod forecast;
 pub mod geo;
 mod guidance;
@@ -79,6 +80,8 @@ pub enum OutputFormat {
 pub enum CliCommand {
     /// Locate imported drill surveys and assay intervals with declared positional covariance.
     DrillDesurvey(drill::Command),
+    DrillComposite(drill::Command),
+    DrillQaqc(drill_qaqc::Command),
     /// Calculate a declared complete cost population under an explicitly selected AISC/AIC definition.
     MetricsCost(cost::Command),
     /// Compare unchanged production quantities under explicit named and versioned price decks.
@@ -648,7 +651,19 @@ fn verb_hint(args: &[String]) -> &'static str {
                 }
                 return "plan pit";
             }
-            "drill" => return drill::VERB,
+            "drill" => {
+                let mut next = i + 1;
+                while let Some(word) = args.get(next) {
+                    match word.as_str() {
+                        "--format" | "--workspace" => next += 2,
+                        "--json" => next += 1,
+                        "composite" => return drill::COMPOSITE_VERB,
+                        "qaqc" => return drill_qaqc::VERB,
+                        _ => return drill::VERB,
+                    }
+                }
+                return drill::VERB;
+            }
             "plant" => return "plant",
             "recon" => return "recon run",
             "html" => return "html claims",
@@ -1266,6 +1281,8 @@ pub fn parse_args(
             | "metrics waterfall"
             | "metrics roce"
             | drill::VERB
+            | drill::COMPOSITE_VERB
+            | drill_qaqc::VERB
             | "forecast spatial-monitor"
             | "decide production"
             | "decide investment"
@@ -1300,6 +1317,8 @@ pub fn parse_args(
             "metrics waterfall" => CliCommand::MetricsWaterfall(waterfall::parse(&words)?),
             "metrics roce" => CliCommand::CapitalReturn(capital_return::parse(&words)?),
             drill::VERB => CliCommand::DrillDesurvey(drill::parse(&words)?),
+            drill::COMPOSITE_VERB => CliCommand::DrillComposite(drill::parse_composite(&words)?),
+            drill_qaqc::VERB => CliCommand::DrillQaqc(drill_qaqc::parse(&words)?),
             "forecast spatial-monitor" => spatial::parse(&words)?,
             "decide production" => {
                 CliCommand::DecideProduction(decision::production::parse(&words)?)
@@ -2408,6 +2427,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
     let to_doctor = || vec![NextAction::new("fmine doctor", DOCTOR_WHY)];
     match cmd {
         CliCommand::DrillDesurvey(command) => drill::execute(command, workspace_root),
+        CliCommand::DrillComposite(command) => drill::execute_composite(command, workspace_root),
+        CliCommand::DrillQaqc(command) => drill_qaqc::execute(command, workspace_root),
         CliCommand::MetricsCost(command) => cost::execute(command, workspace_root),
         CliCommand::MetricsGeo(command) => geo::execute(command, workspace_root),
         CliCommand::MetricsWaterfall(command) => waterfall::execute(command, workspace_root),
@@ -2888,6 +2909,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 forecast_preflight::USAGE,
                 spatial::USAGE,
                 drill::USAGE,
+                drill::COMPOSITE_USAGE,
+                drill_qaqc::USAGE,
                 "forecast journal report --journal <path> --assessment <digest> [--head <hex>] [--provenance <path>] [--timestamp-head <hex> --timestamp-receipt <path> --timestamp-roots <pem> [--timestamp-intermediates <pem>]]",
                 doctor::USAGE,
                 repair::PLAN_USAGE,
@@ -3021,6 +3044,10 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(spatial::ROBOT_DOCS_JSON);
             payload.push_str(",\"drill_desurvey\":");
             payload.push_str(drill::ROBOT_DOCS_JSON);
+            payload.push_str(",\"drill_composite\":");
+            payload.push_str(drill::COMPOSITE_ROBOT_DOCS_JSON);
+            payload.push_str(",\"drill_qaqc\":");
+            payload.push_str(drill_qaqc::ROBOT_DOCS_JSON);
             payload.push_str(",\"forecast_cusum_monitor\":");
             payload.push_str(forecast::CUSUM_MONITOR_JSON);
             payload.push_str(",\"forecast_event_log\":");

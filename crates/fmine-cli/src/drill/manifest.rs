@@ -22,22 +22,24 @@ pub(super) struct Table {
 }
 
 pub(super) struct Manifest {
+    pub schema: &'static str,
     pub crs: String,
     pub lane: String,
     pub survey_error_model: String,
     pub omitted_uncertainty: String,
     pub tables: Vec<Table>,
     pub holes: Vec<HoleGeometry>,
+    pub compositing: Option<super::composite::Declaration>,
 }
 
 pub(super) fn invalid(detail: impl Into<String>) -> Refusal {
     Refusal::new(
         RefusalCode::SourceCellUnusable208,
-        format!("drill desurvey declaration: {}", detail.into()),
+        format!("drill declaration: {}", detail.into()),
     )
 }
 
-fn fields<'a>(
+pub(super) fn fields<'a>(
     values: &'a [TomlField],
     required: &[&str],
     optional: &[&str],
@@ -66,7 +68,7 @@ fn fields<'a>(
     Ok(result)
 }
 
-fn get<'a>(values: &BTreeMap<&str, &'a str>, key: &str) -> Result<&'a str, Refusal> {
+pub(super) fn get<'a>(values: &BTreeMap<&str, &'a str>, key: &str) -> Result<&'a str, Refusal> {
     values
         .get(key)
         .copied()
@@ -74,13 +76,17 @@ fn get<'a>(values: &BTreeMap<&str, &'a str>, key: &str) -> Result<&'a str, Refus
 }
 
 fn sigma(values: &BTreeMap<&str, &str>, key: &str) -> Result<f64, Refusal> {
-    get(values, key)?
-        .parse::<f64>()
+    let raw = get(values, key)?;
+    let nonzero_mantissa = raw
+        .split(['e', 'E'])
+        .next()
+        .is_some_and(|s| s.bytes().any(|b| (b'1'..=b'9').contains(&b)));
+    raw.parse::<f64>()
         .ok()
-        .filter(|v| v.is_finite() && *v >= 0.0)
+        .filter(|v| v.is_finite() && *v >= 0.0 && (*v != 0.0 || !nonzero_mantissa))
         .ok_or_else(|| {
             invalid(format!(
-                "{key} must be a finite nonnegative one-sigma value"
+                "{key} must be a finite nonnegative one-sigma value without nonzero underflow"
             ))
         })
 }
@@ -160,8 +166,13 @@ fn hole(values: &[TomlField]) -> Result<HoleGeometry, Refusal> {
     })
 }
 
-pub(super) fn parse(text: &str) -> Result<Manifest, Refusal> {
+pub(super) fn parse(text: &str, composite: bool) -> Result<Manifest, Refusal> {
     let doc = parse_subset(text).map_err(|e| invalid(e.to_string()))?;
+    let schema = if composite {
+        super::composite::SCHEMA
+    } else {
+        SCHEMA
+    };
     let top = fields(
         &doc.top,
         &[
@@ -173,8 +184,8 @@ pub(super) fn parse(text: &str) -> Result<Manifest, Refusal> {
         ],
         &[],
     )?;
-    if get(&top, "schema")? != SCHEMA {
-        return Err(invalid(format!("schema must be {SCHEMA}")));
+    if get(&top, "schema")? != schema {
+        return Err(invalid(format!("schema must be {schema}")));
     }
     let lane = get(&top, "evidence_lane")?;
     if !matches!(lane, "synthetic" | "internal") {
@@ -184,7 +195,7 @@ pub(super) fn parse(text: &str) -> Result<Manifest, Refusal> {
     if !matches!(survey_error_model, "random" | "systematic") {
         return Err(invalid("survey_error_model must be random or systematic"));
     }
-    if doc.rows.len() > 4099 {
+    if doc.rows.len() > if composite { 24_100 } else { 4099 } {
         return Err(invalid(
             "at most three tables and 4096 hole declarations are admitted",
         ));
@@ -220,6 +231,7 @@ pub(super) fn parse(text: &str) -> Result<Manifest, Refusal> {
                 }
             }
             "hole" => holes.push(hole(&row.fields)?),
+            "composite" | "domain" if composite => {}
             _ => {
                 return Err(invalid(format!(
                     "unsupported table {} at line {}",
@@ -228,17 +240,23 @@ pub(super) fn parse(text: &str) -> Result<Manifest, Refusal> {
             }
         }
     }
-    if tables.len() != 3 || holes.is_empty() {
+    if tables.len() != 3 || holes.is_empty() || holes.len() > 4096 {
         return Err(invalid(
-            "exactly one collar, survey and assay table, and at least one hole are required",
+            "exactly one collar, survey and assay table, and 1..4096 holes are required",
         ));
     }
     Ok(Manifest {
+        schema,
         crs: get(&top, "crs")?.into(),
         lane: lane.into(),
         survey_error_model: survey_error_model.into(),
         omitted_uncertainty: get(&top, "omitted_uncertainty")?.into(),
         tables: tables.into_values().collect(),
         holes,
+        compositing: if composite {
+            Some(super::composite::parse(&doc)?)
+        } else {
+            None
+        },
     })
 }

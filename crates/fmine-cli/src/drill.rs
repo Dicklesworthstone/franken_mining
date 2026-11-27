@@ -1,8 +1,13 @@
 //! DESIGN (BD-188, bd-zx57): source-bound acQuire exports become usable Corebox geometry.
 //! Determinism: DeterministicPerIsa (exact input snapshots, minimum-curvature binary64 projection).
 
+mod composite;
 mod manifest;
 mod render;
+
+pub use composite::{
+    ROBOT_DOCS_JSON as COMPOSITE_ROBOT_DOCS_JSON, USAGE as COMPOSITE_USAGE, VERB as COMPOSITE_VERB,
+};
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -53,15 +58,23 @@ pub struct Command {
 }
 
 pub fn parse(args: &[String]) -> Result<Command, String> {
+    parse_for(args, "desurvey", USAGE)
+}
+
+pub fn parse_composite(args: &[String]) -> Result<Command, String> {
+    parse_for(args, "composite", COMPOSITE_USAGE)
+}
+
+fn parse_for(args: &[String], subcommand: &str, usage: &str) -> Result<Command, String> {
     let (mut options, words) = journal_arguments(args, &[])?;
     let input = options.remove("--input").filter(|s| !s.trim().is_empty());
     let cas = options.remove("--cas").filter(|s| !s.trim().is_empty());
-    if words != ["drill", "desurvey"] || !options.is_empty() {
-        return Err(USAGE.into());
+    if words != ["drill", subcommand] || !options.is_empty() {
+        return Err(usage.into());
     }
     Ok(Command {
-        input: input.ok_or(USAGE)?.into(),
-        cas: cas.ok_or(USAGE)?.into(),
+        input: input.ok_or(usage)?.into(),
+        cas: cas.ok_or(usage)?.into(),
     })
 }
 
@@ -118,11 +131,38 @@ fn actions() -> Vec<NextAction> {
 }
 
 pub fn execute(command: &Command, root: &Path) -> Envelope {
+    execute_mode(command, root, false)
+}
+
+pub fn execute_composite(command: &Command, root: &Path) -> Envelope {
+    execute_mode(command, root, true)
+}
+
+fn execute_mode(command: &Command, root: &Path, compositing: bool) -> Envelope {
+    let (verb, key, title, no_claim) = if compositing {
+        (
+            COMPOSITE_VERB,
+            "compositing",
+            "Drill composite",
+            composite::NO_CLAIM,
+        )
+    } else {
+        (VERB, "geometry", "Drill desurvey", NO_CLAIM)
+    };
+    let evidence_description = if compositing {
+        "Claims are Assumed, Internal and uncalibrated."
+    } else {
+        "Geometry is Assumed, Internal and uncalibrated."
+    };
     let run = || -> Result<Envelope, Refusal> {
         let path = root.join(&command.input);
-        let (text, source) =
-            worksheet_input::read(&path, "drill desurvey manifest", MAX_MANIFEST_BYTES)?;
-        let declaration = manifest::parse(&text)?;
+        let source_label = if compositing {
+            "drill composite manifest"
+        } else {
+            "drill desurvey manifest"
+        };
+        let (text, source) = worksheet_input::read(&path, source_label, MAX_MANIFEST_BYTES)?;
+        let declaration = manifest::parse(&text, compositing)?;
         let parent = path
             .parent()
             .ok_or_else(|| invalid("manifest has no parent directory"))?;
@@ -185,19 +225,23 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
                 )));
             }
             let holes = prepare_geometry(&bundle, &declaration.holes, &crs)?;
-            render::geometry(holes, &anchors, &declaration)
+            if compositing {
+                composite::render(&holes, &bundle, &anchors, &declaration)
+            } else {
+                render::geometry(holes, &anchors, &declaration)
+            }
         };
         let mut envelope = match projection() {
             Ok((geometry, markdown)) => {
-                let report = format!("{{{source_report},\"geometry\":{geometry}}}");
+                let report = format!("{{{source_report},\"{key}\":{geometry}}}");
                 let digest = fmine_core::hash::sha256(report.as_bytes());
                 let mut envelope = Envelope::ok(
-                    VERB,
+                    verb,
                     format!("{{\"receipt_sha256\":\"{digest}\",\"report\":{report}}}"),
                     Vec::new(),
                 );
                 envelope.rendered_markdown = Some(format!(
-                    "# Drill desurvey\n\nEvidence lane: {}. Survey error model: {}. Geometry is Assumed, Internal and uncalibrated.\n\n{markdown}\n\nReceipt SHA-256: `{digest}`. Source bundle: `{}`.\n\nOmitted uncertainty: {}\n\n{NO_CLAIM}",
+                    "# {title}\n\nEvidence lane: {}. Survey error model: {}. {evidence_description}\n\n{markdown}\n\nReceipt SHA-256: `{digest}`. Source bundle: `{}`.\n\nOmitted uncertainty: {}\n\n{no_claim}",
                     declaration.lane,
                     declaration.survey_error_model,
                     bundle.bundle_digest,
@@ -206,15 +250,15 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
                 envelope
             }
             Err(refusal) => {
-                let mut envelope = Envelope::refused(VERB, refusal, actions());
-                envelope.payload_json = format!("{{{source_report},\"geometry\":null}}");
+                let mut envelope = Envelope::refused(verb, refusal, actions());
+                envelope.payload_json = format!("{{{source_report},\"{key}\":null}}");
                 envelope
             }
         };
-        envelope.no_claim = Some(NO_CLAIM);
+        envelope.no_claim = Some(no_claim);
         Ok(envelope)
     };
-    let mut envelope = run().unwrap_or_else(|refusal| Envelope::refused(VERB, refusal, actions()));
-    envelope.no_claim = Some(NO_CLAIM);
+    let mut envelope = run().unwrap_or_else(|refusal| Envelope::refused(verb, refusal, actions()));
+    envelope.no_claim = Some(no_claim);
     envelope
 }
