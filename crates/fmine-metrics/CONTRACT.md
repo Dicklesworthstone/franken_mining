@@ -484,6 +484,11 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
   multiplication. Exact arithmetic overflow remains a refusal.
 - **Derived Claims keep their provenance and never gain strength.** `derived_claims_preserve_provenance_and_never_upgrade_evidence`, `derived_claims_keep_uncertainty_confidentiality_and_source_identity`, `ordering_is_deterministic_and_evidence_cannot_be_strengthened`, `fit_and_both_models_preserve_every_registered_venture_and_wall`, `summation_preserves_source_identity_weaker_metadata_and_unknown_terms`, `arithmetic_inherits_the_weakest_evidence_state_and_strongest_confidentiality` and `canonical_claims_preserve_issuer_evidence_and_complete_ancestry`.
 - **A roll-forward identity binds only agreeing members (BD-340.S5, BD-331.S7).** Units, basis, member periods, raw-token precision, distinct reader identities, page bounds and source hashes must agree. Shared cells within a document are solved jointly by `exact_feas`; each feasible witness and infeasible certificate is checked again before emission. Different documents remain separate vintages.
+- DESIGN (bd-e8e1). A contained-metal check binds agreed dry kilotonnes, grade and contained
+  metal on one period and basis. Positive tonnage and an isolated grade cell allow exact ratio
+  elimination, with the gold troy-ounce factor or copper percentage factor. Shared contained metal
+  and tonnage enter the same solve as sums. The checker requires nonnegative grade and metal
+  intervals and refuses an upper grade bound above the corresponding pure-metal limit.
 - **A reserve-replacement ratio is exact and bound to one definition (BD-063).** `assess_with_metrics` uses the definition's declared numerator and denominator signs and scaling. The signed depletion interval must be strictly positive and bounded away from zero. Shared amounts enter the same joint solve as the sums and roll-forwards. Original source tokens are unchanged, and gold and GEO definitions, windows and deck keys stay distinct. There is no implicit metal or price conversion and no shared-rate nonlinear solve. `crates/xtask/tests/reserve_replacement.rs` covers it.
 - **Declared PDF unit costs use the same joint exact solver (BD-331/340).** `gold_cost_per_sold_oz`
   binds `usd_m`, sold `koz` and `usd_per_oz` with factor 1000; `copper_cost_per_sold_lb` binds `usd_m`,

@@ -396,6 +396,70 @@ def cost_rate_workspace(copper=False, mode="normal"):
     return root
 
 
+def contained_metal_workspace(metal, *, mode="normal", product=True, subtotal=False):
+    root = workspace(f"contained-{metal}-{mode}")
+    metal_unit, grade_unit, grade = (
+        ("koz", "g_per_t", "3.11") if metal == "gold" else ("kt", "percent", "1.2040")
+    )
+    amount = "100.0" if metal == "gold" else "12.0"
+    if mode == "wrong_amount":
+        amount = "125.0" if metal == "gold" else "18.0"
+    mass = "0.0" if mode == "zero_tonnage" else "1000.00"
+    if mode == "negative_grade":
+        grade = "(1.0)"
+    if mode == "excess_grade":
+        grade = "1000000.1" if metal == "gold" else "101.0"
+    basis = f"invented_mine;full;resource;metal={metal}"
+    period = "effective_2025_12_31"
+    definitions = ['schema = "fmine.table-identities.v1"\nissuer = "table_test"\n']
+
+    def identity(identifier, kind, total, unit, terms):
+        definitions.append(
+            f'[[identity]]\nid = "{identifier}"\ndoc = "{FILE}"\nfamily = "{identifier}"\n'
+            f'kind = "{kind}"\ntotal = "{total}"\ntotal_period = "{period}"\nunit = "{unit}"\n'
+            f'basis = "{basis}"\nconstruction = "rounded_once"\nconvention = "closed"\n'
+        )
+        for quantity, role in terms:
+            definitions.append(
+                f'[[term]]\nidentity = "{identifier}"\nquantity = "{quantity}"\n'
+                f'period = "{period}"\nsign = 1\nrole = "{role}"\n'
+            )
+
+    if product:
+        identity("contained", f"{metal}_contained_from_grade", "metal", metal_unit,
+                 [("tonnage", "tonnage"), ("grade", "grade")])
+    if subtotal:
+        identity("resource_subtotal", "sum", "subtotal", metal_unit,
+                 [("metal", "member"), ("other", "member")])
+    if mode == "shared_grade":
+        identity("grade_reused", "sum", "grade_total", grade_unit, [("grade", "member")])
+    if mode == "shared_tonnage":
+        identity("tonnage_sum", "sum", "tonnage_total", "dry_kt",
+                 [("tonnage", "member"), ("other_tonnage", "member")])
+    rows = [
+        ("metal", amount, metal_unit),
+        ("grade", grade, grade_unit),
+        ("tonnage", mass, "wet_kt" if mode == "wet_tonnage" else "dry_kt"),
+    ]
+    if subtotal:
+        rows.extend([("other", "10.000", metal_unit), ("subtotal", "21.960", metal_unit)])
+    if mode == "shared_tonnage":
+        rows.extend([("other_tonnage", "100.00", "dry_kt"), ("tonnage_total", "1100.00", "dry_kt")])
+    readings = ['schema = "fmine.transcriptions.v1"\nissuer = "table_test"\n']
+    for quantity, token, unit in rows:
+        for reader in ("reader_a", "reader_b"):
+            reading_basis = f"{basis};different_scope" if mode == "wrong_basis" and quantity == "grade" else basis
+            readings.append(
+                f'[[entry]]\ndoc = "{FILE}"\ndoc_sha256 = "{digest(DOCUMENT)}"\npage = 1\n'
+                f'table = "Invented resource table"\nrow = "{quantity}"\ncol = "Reported"\n'
+                f'token = "{token}"\nquantity = "{quantity}"\nunit = "{unit}"\n'
+                f'basis = "{reading_basis}"\nperiod = "{period}"\nreader = "{reader}"\n'
+            )
+    (root / DEFINITIONS).write_text("\n".join(definitions), encoding="utf-8")
+    (root / "registries/transcriptions/table_test.toml").write_text("\n".join(readings), encoding="utf-8")
+    return root
+
+
 def cost_bridge_workspace(copper=True, mode="normal"):
     """Two independent invented filings; no numerator reconstructed from a reported rate."""
     root = workspace(f"cost-bridge-{copper}-{mode}")
@@ -964,6 +1028,80 @@ class CostRateScenarios(unittest.TestCase):
         admitted, raw = invoke(root, ["--as-of", "2026-02-01"])
         self.assertEqual(admitted["exit_code"], 0, raw)
         self.assertTrue(admitted["payload"]["source_bytes_verified"])
+
+
+class ContainedMetalScenarios(unittest.TestCase):
+    def test_gold_and_copper_have_exact_checked_witnesses_and_detect_bad_amounts(self):
+        for metal, factor in (("gold", Fraction("31.1034768")), ("copper", Fraction(100))):
+            with self.subTest(metal=metal):
+                root = contained_metal_workspace(metal)
+                envelope, raw = successful(root)
+                checks = envelope["payload"]["checks"]
+                self.assertEqual(checks["refused"], [])
+                component, = checks["components"]
+                self.assertEqual((component["verdict"], component["checked"]), ("feasible", True))
+                declaration = checks["definitions"][0]["contained_metal"]
+                self.assertEqual(declaration["tonnage_unit"], "dry_kt")
+                self.assertEqual(declaration["grade_unit"], "g_per_t" if metal == "gold" else "percent")
+                self.assertEqual(declaration["metal_unit"], "koz" if metal == "gold" else "kt")
+                value = declaration["grade_factor"]
+                self.assertEqual(Fraction(int(value["num"]), int(value["den"])), factor)
+                witness = {
+                    row["locator"].rsplit(":", 1)[1].split("/")[0]:
+                    Fraction(int(row["value"]["num"]), int(row["value"]["den"]))
+                    for row in component["witness"]
+                }
+                self.assertGreater(witness["tonnage"], 0)
+                self.assertEqual(witness["grade"] * witness["tonnage"], factor * witness["metal"])
+                self.assertEqual(raw, successful(root)[1])
+                self.assertTrue(all(value is False for value in envelope["flags"].values()))
+                changed, _ = successful(contained_metal_workspace(metal, mode="wrong_amount"))
+                conflict, = changed["payload"]["checks"]["components"]
+                self.assertEqual((conflict["verdict"], conflict["checked"]), ("infeasible", True))
+                self.assertIsNotNone(conflict["certificate_digest"])
+
+    def test_joint_subtotal_certifies_a_conflict_that_separate_checks_allow(self):
+        for product, subtotal, expected in ((True, False, "feasible"), (False, True, "feasible"),
+                                            (True, True, "infeasible")):
+            root = contained_metal_workspace("copper", product=product, subtotal=subtotal)
+            envelope, _ = successful(root)
+            component, = envelope["payload"]["checks"]["components"]
+            self.assertEqual((component["verdict"], component["checked"]), (expected, True))
+        self.assertEqual(component["identities"], ["contained", "resource_subtotal"])
+        pack_dir = root / "pack"
+        pack_dir.mkdir()
+        (pack_dir / "resources.toml").write_bytes((root / DEFINITIONS).read_bytes())
+        pack = binary(root, ["screen", "target", "--docs", "pack"], "json")
+        self.assertEqual(pack.returncode, 0, pack.stderr)
+        documents = json.loads(pack.stdout)["payload"]["documents"]
+        self.assertEqual(documents[0]["result"]["payload"]["checks"], envelope["payload"]["checks"])
+        feasible, _ = successful(contained_metal_workspace("copper", mode="shared_tonnage"))
+        joint, = feasible["payload"]["checks"]["components"]
+        self.assertEqual((joint["verdict"], joint["checked"]), ("feasible", True))
+        self.assertEqual(joint["identities"], ["contained", "tonnage_sum"])
+
+    def test_resource_checks_refuse_wrong_units_basis_physical_domain_and_shared_grade(self):
+        for metal, mode, message in (
+            ("copper", "wet_tonnage", "unit or basis"),
+            ("copper", "wrong_basis", "unit or basis"),
+            ("copper", "zero_tonnage", "tonnage"),
+            ("copper", "negative_grade", "nonnegative"),
+            ("copper", "excess_grade", "100 percent"),
+            ("gold", "excess_grade", "1000000 g/t"),
+        ):
+            with self.subTest(metal=metal, mode=mode):
+                envelope, _ = successful(contained_metal_workspace(metal, mode=mode))
+                checks = envelope["payload"]["checks"]
+                self.assertEqual(checks["components"], [])
+                refusal, = checks["refused"]
+                self.assertIn(message, refusal["reason"])
+        root = contained_metal_workspace("copper", mode="shared_grade")
+        envelope, raw = invoke(root)
+        self.assertEqual(envelope["refusal"]["code"], "FMINE-REF-202", raw)
+        self.assertIn("grade cannot be reused", raw)
+        original = contained_metal_workspace("gold")
+        (original / "documents" / FILE).write_bytes(DOCUMENT + b" changed")
+        assert_refusal(original, "FMINE-REF-505", 8)
 
 
 class CutoffScenarios(unittest.TestCase):

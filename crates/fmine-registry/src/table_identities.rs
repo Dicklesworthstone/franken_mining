@@ -19,6 +19,8 @@ pub enum IdentityKind {
     ReserveReplacement,
     GoldCostPerSoldOunce,
     CopperCostPerSoldPound,
+    GoldContainedFromGrade,
+    CopperContainedFromGrade,
 }
 
 impl IdentityKind {
@@ -30,6 +32,8 @@ impl IdentityKind {
             Self::ReserveReplacement => "reserve_replacement",
             Self::GoldCostPerSoldOunce => "gold_cost_per_sold_oz",
             Self::CopperCostPerSoldPound => "copper_cost_per_sold_lb",
+            Self::GoldContainedFromGrade => "gold_contained_from_grade",
+            Self::CopperContainedFromGrade => "copper_contained_from_grade",
         }
     }
 
@@ -47,6 +51,42 @@ impl IdentityKind {
             unit,
             factor,
         })
+    }
+
+    #[must_use]
+    pub const fn contained_metal(self) -> Option<ContainedMetal> {
+        match self {
+            Self::GoldContainedFromGrade => Some(ContainedMetal::Gold),
+            Self::CopperContainedFromGrade => Some(ContainedMetal::Copper),
+            _ => None,
+        }
+    }
+}
+
+/// The fixed printed scales of a dry-tonnage and contained-grade identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainedMetal {
+    Gold,
+    Copper,
+}
+
+impl ContainedMetal {
+    pub const TONNAGE_UNIT: &str = "dry_kt";
+
+    #[must_use]
+    pub const fn grade_unit(self) -> &'static str {
+        match self {
+            Self::Gold => "g_per_t",
+            Self::Copper => "percent",
+        }
+    }
+
+    #[must_use]
+    pub const fn metal_unit(self) -> &'static str {
+        match self {
+            Self::Gold => "koz",
+            Self::Copper => "kt",
+        }
     }
 }
 
@@ -67,6 +107,8 @@ pub enum TermRole {
     Move,
     Numerator,
     Denominator,
+    Tonnage,
+    Grade,
 }
 
 impl TermRole {
@@ -78,6 +120,8 @@ impl TermRole {
             Self::Move => "move",
             Self::Numerator => "numerator",
             Self::Denominator => "denominator",
+            Self::Tonnage => "tonnage",
+            Self::Grade => "grade",
         }
     }
 }
@@ -243,6 +287,44 @@ fn validate_cost_rate(identity: &TableIdentity) -> Result<(), &'static str> {
     {
         return Err(
             "cost rate and both operands require the same period and unmodified printed signs",
+        );
+    }
+    Ok(())
+}
+
+fn validate_contained_metal(
+    identity: &TableIdentity,
+    metal: ContainedMetal,
+    identities: &[TableIdentity],
+) -> Result<(), &'static str> {
+    if identity.unit != metal.metal_unit() {
+        return Err("contained metal requires koz for gold or kt for copper");
+    }
+    let grade_cell = identity.terms.iter().find(|t| t.role == TermRole::Grade);
+    if identity.construction != "rounded_once"
+        || identity.terms.len() != 2
+        || !identity.terms.iter().any(|t| t.role == TermRole::Tonnage)
+        || identity
+            .terms
+            .iter()
+            .any(|t| t.sign != 1 || t.period != identity.total_period)
+    {
+        return Err(
+            "contained metal needs rounded_once, one grade and one tonnage with the same period and signs +1",
+        );
+    }
+    let grade_cell = grade_cell.ok_or("contained metal needs one grade and one dry tonnage")?;
+    if identities.iter().any(|other| {
+        other.doc == identity.doc
+            && other.id != identity.id
+            && ((other.total == grade_cell.quantity && other.total_period == grade_cell.period)
+                || other
+                    .terms
+                    .iter()
+                    .any(|t| t.quantity == grade_cell.quantity && t.period == grade_cell.period))
+    }) {
+        return Err(
+            "the quoted grade cannot be reused in another identity; shared-grade bilinear checks are unsupported",
         );
     }
     Ok(())
@@ -628,6 +710,11 @@ impl TableIdentityRegistry {
                                 | IdentityKind::CopperCostPerSoldPound,
                             TermRole::Numerator | TermRole::Denominator
                         )
+                        | (
+                            IdentityKind::GoldContainedFromGrade
+                                | IdentityKind::CopperContainedFromGrade,
+                            TermRole::Tonnage | TermRole::Grade
+                        )
                 ) || (term.role == TermRole::Opening && term.sign != 1)
                 {
                     return Err(bad("term role does not match the declared identity kind"));
@@ -670,6 +757,16 @@ impl TableIdentityRegistry {
                             "a quoted cost rate cannot be reused in another identity; shared-rate bilinear checks are unsupported",
                         ));
                     }
+                }
+                (
+                    None,
+                    kind @ (IdentityKind::GoldContainedFromGrade
+                    | IdentityKind::CopperContainedFromGrade),
+                ) => {
+                    let metal = kind
+                        .contained_metal()
+                        .ok_or_else(|| bad("unknown contained metal"))?;
+                    validate_contained_metal(identity, metal, &self.identities).map_err(bad)?;
                 }
                 (None, IdentityKind::Sum | IdentityKind::RollForward) => {}
                 _ => {
@@ -835,10 +932,12 @@ pub fn parse_table_identities(
                     "reserve_replacement" => IdentityKind::ReserveReplacement,
                     "gold_cost_per_sold_oz" => IdentityKind::GoldCostPerSoldOunce,
                     "copper_cost_per_sold_lb" => IdentityKind::CopperCostPerSoldPound,
+                    "gold_contained_from_grade" => IdentityKind::GoldContainedFromGrade,
+                    "copper_contained_from_grade" => IdentityKind::CopperContainedFromGrade,
                     _ => {
                         return fail(
                             line,
-                            "kind must be sum, roll_forward, reserve_replacement, gold_cost_per_sold_oz or copper_cost_per_sold_lb",
+                            "unknown identity kind; use sum, roll_forward, reserve_replacement, gold_cost_per_sold_oz, copper_cost_per_sold_lb, gold_contained_from_grade or copper_contained_from_grade",
                         );
                     }
                 };
@@ -900,10 +999,12 @@ pub fn parse_table_identities(
                     "move" => TermRole::Move,
                     "numerator" => TermRole::Numerator,
                     "denominator" => TermRole::Denominator,
+                    "tonnage" => TermRole::Tonnage,
+                    "grade" => TermRole::Grade,
                     _ => {
                         return fail(
                             line,
-                            "role must be member, opening, move, numerator or denominator",
+                            "role must be member, opening, move, numerator, denominator, tonnage or grade",
                         );
                     }
                 };

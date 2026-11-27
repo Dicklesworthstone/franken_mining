@@ -2564,7 +2564,8 @@ None: every failure is a usage error or a typed refusal.
   exercise the executable with generated source bytes and independently calculated rational expectations;
   it proves the adapter, not authentic issuer filing coverage or the full BD-346 gate.
 - DESIGN (BD-340.S5/S8): `check tables` exposes the existing workbook identity ledger, or checks a strict
-  `--definitions` registry of PDF sums, reserve roll-forwards and named reserve-replacement ratios. The PDF mode verifies every declared
+  `--definitions` registry of PDF sums, reserve roll-forwards, named reserve-replacement ratios and
+  dry-tonnage/grade/contained-metal checks for gold and copper. The PDF mode verifies every declared
   document's bytes, even when its values have no readings, and selects only the declared quantities while
   retaining all readers at their locators. It delegates exact arithmetic, joint consistency, checked
   certificates and correction sets to `fmine-metrics::roll_forward`; it selects no corrected value.

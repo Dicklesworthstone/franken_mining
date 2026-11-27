@@ -3245,6 +3245,23 @@ result. Conflict reports retain correction sets and implied intervals without se
 Missing agreed operands remain listed identities. A mathematical conflict is a finding with exit zero;
 unreadable/changed source files and reader disagreements preserve their typed refusals.
 
+For a resource or reserve table that prints dry tonnage, grade and contained metal, use
+`kind = "gold_contained_from_grade"` or `kind = "copper_contained_from_grade"`. Set
+`total` to the contained-metal quantity and add one term each with `role = "tonnage"` and
+`role = "grade"`. Both terms use `sign = 1`, the total's period, and the same explicit basis as
+the contained-metal row. Use `construction = "rounded_once"`.
+
+| Kind | Dry tonnage unit | Grade unit | Contained metal unit | Exact relation |
+|---|---|---|---|---|
+| `gold_contained_from_grade` | `dry_kt` | `g_per_t` | `koz` | Metal = tonnage × grade / 31.1034768 |
+| `copper_contained_from_grade` | `dry_kt` | `percent` | `kt` | Metal = tonnage × grade / 100 |
+
+The checker tests the displayed rounding intervals jointly with any declared subtotals that share
+the tonnage or metal cells. Give each contained-metal equation its own printed grade cell. The
+entire tonnage interval must be positive, and grade and metal intervals must be nonnegative.
+Grade bounds must fit within 100 percent for copper or 1,000,000 g/t for gold. The result uses the printed dry basis
+and retains all three original source readings.
+
 Reserve replacement uses `kind = "reserve_replacement"` in the same declarations file. It requires a named
 `reserve_replacement.gold_oz@…` or `reserve_replacement.geo@…` definition from `registries/metrics.toml`,
 `unit = "percent"`, `factor = 100`, and explicit, identical `numerator_unit` and `denominator_unit`.

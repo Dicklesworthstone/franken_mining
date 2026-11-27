@@ -1,4 +1,4 @@
-//! Source-bound PDF sums, cost rates and reserve roll-forwards (BD-340.S5, BD-331.S7).
+//! Source-bound PDF sums, cost rates, contained metal and reserve roll-forwards (BD-340.S5, BD-331.S7).
 //!
 //! The caller verifies registered document bytes and reader agreement. This pure adapter rechecks the
 //! admitted rows against those declarations, preserves each filing vintage, and delegates every arithmetic
@@ -13,9 +13,10 @@ use fmine_numerics::exact_feas::{self as xf, Rat};
 use fmine_registry::metrics::{MetricDefinition, MetricFamily, MetricRegistry};
 use fmine_registry::sources::{DocumentRow, is_date};
 use fmine_registry::table_identities::{
-    IdentityKind, TableIdentity, TableIdentityRegistry, TermRole,
+    ContainedMetal, IdentityKind, TableIdentity, TableIdentityRegistry, TermRole,
 };
 use fmine_registry::transcriptions::{Accepted, Token, parse_token};
+use fmine_units::{TROY_OZ_TO_GRAMS_DEN, TROY_OZ_TO_GRAMS_NUM};
 
 pub mod cost_bridge;
 pub mod quarter;
@@ -261,12 +262,89 @@ pub(crate) fn bind_reading(
     })
 }
 
+fn contained_grade_factor(metal: ContainedMetal) -> (i128, i128) {
+    match metal {
+        ContainedMetal::Gold => (TROY_OZ_TO_GRAMS_NUM, TROY_OZ_TO_GRAMS_DEN),
+        ContainedMetal::Copper => (100, 1),
+    }
+}
+
+fn bind_contained_metal(
+    definition: &TableIdentity,
+    metal: ContainedMetal,
+    sources: &[SourceCell],
+) -> Result<xf::IdentityKind, String> {
+    let operand = |role| {
+        definition
+            .terms
+            .iter()
+            .zip(&sources[1..])
+            .find(|(term, _)| term.role == role)
+            .map(|(_, source)| &source.cell)
+            .ok_or_else(|| format!("missing {}", role.as_str()))
+    };
+    let grade = operand(TermRole::Grade)?;
+    let tonnage = operand(TermRole::Tonnage)?;
+    let contained = &sources[0].cell;
+    let rule = convention(&definition.convention);
+    let bounds = |cell: &xf::Cell| {
+        cell.step
+            .checked_div(Rat::from_integer(2))
+            .map_err(|e| e.to_string())
+            .and_then(|half| {
+                rule.interval(cell.printed, half)
+                    .map_err(|e| format!("{}: printed interval unavailable: {e:?}", cell.locator))
+            })
+    };
+    if bounds(tonnage)?.lo.signum() <= 0 {
+        return Err(format!(
+            "{}: dry tonnage interval must be strictly positive",
+            tonnage.locator
+        ));
+    }
+    let grade_bounds = bounds(grade)?;
+    for (cell, interval) in [(grade, grade_bounds), (contained, bounds(contained)?)] {
+        if interval.lo.signum() < 0 {
+            return Err(format!(
+                "{}: printed interval must be nonnegative",
+                cell.locator
+            ));
+        }
+    }
+    let (grade_max, unit) = match metal {
+        ContainedMetal::Gold => (1_000_000, "g/t"),
+        ContainedMetal::Copper => (100, "percent"),
+    };
+    if grade_bounds
+        .hi
+        .checked_cmp(Rat::from_integer(grade_max))
+        .map_err(|e| e.to_string())?
+        .is_gt()
+    {
+        return Err(format!(
+            "{}: grade interval may not exceed {grade_max} {unit}",
+            grade.locator
+        ));
+    }
+    let (num, den) = contained_grade_factor(metal);
+    // DESIGN. With positive dry tonnage and an unshared grade cell, the existing
+    // isolated-rate linearization exactly bounds the product. Metal and tonnage
+    // stay in the same joint component as any sums that use them.
+    Ok(xf::IdentityKind::Ratio {
+        rate: grade.locator.clone(),
+        num: contained.locator.clone(),
+        den: tonnage.locator.clone(),
+        factor: Rat::new(num, den).map_err(|e| e.to_string())?,
+    })
+}
+
 fn bind(
     definition: &TableIdentity,
     readings: &[Accepted],
     documents: &[DocumentRow],
 ) -> Result<(xf::Identity, Vec<SourceCell>), String> {
     let cost_rate = definition.kind.cost_rate();
+    let contained_metal = definition.kind.contained_metal();
     let document = documents
         .iter()
         .find(|d| d.file == definition.doc)
@@ -282,11 +360,18 @@ fn bind(
     let mut sources = vec![total];
     let mut terms = Vec::new();
     for term in &definition.terms {
-        let unit = match (&definition.replacement, cost_rate, term.role) {
-            (Some(r), _, TermRole::Numerator) => r.numerator_unit.as_str(),
-            (Some(r), _, TermRole::Denominator) => r.denominator_unit.as_str(),
-            (_, Some(r), TermRole::Numerator) => r.numerator_unit,
-            (_, Some(r), TermRole::Denominator) => r.denominator_unit,
+        let unit = match (
+            &definition.replacement,
+            cost_rate,
+            contained_metal,
+            term.role,
+        ) {
+            (Some(r), _, _, TermRole::Numerator) => r.numerator_unit.as_str(),
+            (Some(r), _, _, TermRole::Denominator) => r.denominator_unit.as_str(),
+            (_, Some(r), _, TermRole::Numerator) => r.numerator_unit,
+            (_, Some(r), _, TermRole::Denominator) => r.denominator_unit,
+            (_, _, Some(metal), TermRole::Grade) => metal.grade_unit(),
+            (_, _, Some(_), TermRole::Tonnage) => ContainedMetal::TONNAGE_UNIT,
             _ => &definition.unit,
         };
         let source = source_cell(
@@ -329,6 +414,18 @@ fn bind(
                 &moves,
                 total,
             )
+        }
+        IdentityKind::GoldContainedFromGrade | IdentityKind::CopperContainedFromGrade => {
+            xf::Identity {
+                id: definition.id.clone(),
+                family: definition.family.clone(),
+                closure: xf::Closure::Definitional,
+                kind: bind_contained_metal(
+                    definition,
+                    contained_metal.ok_or("missing contained metal scale")?,
+                    &sources,
+                )?,
+            }
         }
         IdentityKind::ReserveReplacement
         | IdentityKind::GoldCostPerSoldOunce
@@ -724,6 +821,13 @@ pub(crate) fn definition_json(d: &TableIdentity) -> String {
         ",\"cost_rate\":{{\"numerator_unit\":{},\"denominator_unit\":{},\"unit\":{},\"factor\":{},\"formula\":\"factor*cost/sold\"}}",
         js(r.numerator_unit), js(r.denominator_unit), js(r.unit), r.factor
     ));
+    let contained_metal = d.kind.contained_metal().map_or_else(String::new, |metal| {
+        let (num, den) = contained_grade_factor(metal);
+        format!(
+            ",\"contained_metal\":{{\"tonnage_unit\":{},\"grade_unit\":{},\"metal_unit\":{},\"grade_factor\":{{\"num\":\"{num}\",\"den\":\"{den}\"}},\"formula\":\"grade=grade_factor*metal/tonnage\"}}",
+            js(ContainedMetal::TONNAGE_UNIT), js(metal.grade_unit()), js(metal.metal_unit())
+        )
+    });
     let terms = d
         .terms
         .iter()
@@ -739,7 +843,7 @@ pub(crate) fn definition_json(d: &TableIdentity) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"id\":{},\"doc\":{},\"family\":{},\"kind\":{},\"total\":{},\"total_period\":{},\"unit\":{},\"basis\":{},\"construction\":{},\"convention\":{},\"replacement\":{replacement}{cost_rate},\"terms\":[{}]}}",
+        "{{\"id\":{},\"doc\":{},\"family\":{},\"kind\":{},\"total\":{},\"total_period\":{},\"unit\":{},\"basis\":{},\"construction\":{},\"convention\":{},\"replacement\":{replacement}{cost_rate}{contained_metal},\"terms\":[{}]}}",
         js(&d.id),
         js(&d.doc),
         js(&d.family),

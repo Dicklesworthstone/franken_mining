@@ -56,6 +56,9 @@ Validated `RegistryCatalog`, `SiteCalendars`, `MetricRegistry`, `SourcesRegistry
   membership is declared rather than inferred. Duplicate quantities, unknown documents/fields, orphan terms,
   missing periods and invalid signs/roles refuse. One construction applies per family and one tie convention
   per document, preventing selection of a rounding rule per instance. `validate` rechecks caller-built structs.
+  DESIGN (bd-e8e1). The gold and copper contained-metal kinds declare fixed dry kilotonne, grade and
+  contained scales. Each requires one `tonnage` and one `grade` term with sign +1, the total's period,
+  and `rounded_once`. The same document, quantity and period grade cell may appear in only one identity.
   `reserve_replacement` identities require one numerator and denominator, a versioned gold-ounce or GEO
   definition, explicit matching ounce units, percentage factor 100 and a price-deck key. The percentage and
   both operands share a three-year `YYYY-YYYY` window. Basis is explicitly attributable contained gold/GEO,
