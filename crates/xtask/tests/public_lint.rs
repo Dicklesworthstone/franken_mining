@@ -75,6 +75,75 @@ fn verdict(text: &str, claims: &[KeyedCell]) -> Verdict {
     report.findings[0].verdict
 }
 
+#[test]
+fn wrapping_a_paragraph_preserves_the_verified_claim_and_original_amount_span() {
+    let source = observation("1637", |_| {});
+    let claims = std::slice::from_ref(&source);
+    let amount = "$1,637/oz";
+    let cited = sentence(&source, amount);
+    let link = format!("[{amount}](fmine:{})", source.claim.claim_id);
+    let plain = cited.replace(&link, amount);
+    for newline in ["\n", "\r\n"] {
+        for (draft, checker) in [
+            (&cited, lint_cited as fn(&str, &[KeyedCell]) -> _),
+            (&plain, lint_discover),
+        ] {
+            let wrapped = draft
+                .replace("Site A Q1", &format!("Site A{newline}Q1"))
+                .replace(
+                    "per ounce sold is",
+                    &format!("per{newline}ounce sold is{newline}"),
+                );
+            let report = checker(&wrapped, claims);
+            assert_eq!(report.findings.len(), 1, "{}", report.to_json());
+            let result = &report.findings[0];
+            assert_eq!(result.verdict, Verdict::Verified, "{wrapped}");
+            assert_eq!(
+                result.source.as_ref().unwrap().claim.claim_id,
+                source.claim.claim_id
+            );
+            let at = wrapped.find(amount).unwrap();
+            assert_eq!(result.span, (at, at + amount.len()));
+            assert_eq!(result.raw, amount);
+            assert_eq!(
+                equality_target(&wrapped, result.span, &source),
+                equality_target(draft, checker(draft, claims).findings[0].span, &source)
+            );
+        }
+    }
+}
+
+#[test]
+fn soft_wrapping_does_not_borrow_context_across_markdown_blocks() {
+    let source = observation("1637", |_| {});
+    let mut full = sentence(&source, "$1,637/oz");
+    let (prefix, amount) = full.split_once(" is ").unwrap();
+    for draft in [
+        format!("{prefix} is\n\n{amount}"),
+        format!("{prefix} is  \n{amount}"),
+        format!("{prefix} is\\\n{amount}"),
+        format!("{prefix}\n- is {amount}"),
+        format!("{prefix}\n1. is {amount}"),
+        format!("{prefix}\n| is {amount} |"),
+        format!("# {prefix}\nis {amount}"),
+        format!("{prefix}\n> is {amount}"),
+        format!("```text\n{prefix} is\n{amount}\n```"),
+    ] {
+        let report = lint_cited(&draft, std::slice::from_ref(&source));
+        assert!(!report.findings.is_empty(), "{draft}");
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.verdict != Verdict::Verified),
+            "{draft}"
+        );
+    }
+    full.pop(); // FACT: the continuation is part of this statement without its terminating period.
+    full.push_str("\nfor an undisclosed adjustment.");
+    assert_eq!(verdict(&full, &[source]), Verdict::Unchecked);
+}
+
 fn capex(value: &str, label: &str, release: &str) -> KeyedCell {
     observation(value, |key| {
         key.line.label = label.into();

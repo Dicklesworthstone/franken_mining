@@ -230,6 +230,54 @@ fn capex_lint_uses_source_claims_and_dated_publications_for_each_printed_scope()
 }
 
 #[test]
+fn dated_public_record_reuses_the_wrapped_statement_and_its_qualifiers() {
+    let (workspace, _) = public_record_workspace("public-record-wrapped", Some("2030-05-01"));
+    let profile = load_issuer_profile(&workspace, PUBLIC_RECORD_ISSUER).expect("profile");
+    let snapshot = fmine_public::run_public_assurance(&profile, &workspace).expect("snapshot");
+    let id = snapshot.public_claims.cells["Synthetic_AISC.xlsx:Q1 2030!B16"]
+        .claim
+        .claim_id;
+    let draft = format!(
+        "Site A Q1 2030 ownership basis unprinted AISC per\nounce sold is [$1,250/oz](fmine:{id}).\n\nSite A Q1 2030 ownership basis unprinted AISC per ounce sold is [$1,250/oz](fmine:{id})\nfor an undisclosed adjustment.\n"
+    );
+    std::fs::write(workspace.join("draft.md"), &draft).expect("draft");
+    let result = invoke(
+        &args(&[
+            "lint",
+            "draft.md",
+            "--issuer",
+            PUBLIC_RECORD_ISSUER,
+            "--as-of",
+            "2030-05-03",
+        ]),
+        &workspace,
+    )
+    .0;
+    assert_eq!(result.exit_code, 0, "{}", result.to_json());
+    let parsed = fmine_io::omf::json::parse(result.payload_json.as_bytes()).expect("JSON payload");
+    for (section, field, expected) in [
+        ("lint", "verdict", ["verified", "unchecked"]),
+        ("public_record", "status", ["disclosed", "not_assessed"]),
+    ] {
+        let findings = parsed
+            .get(section)
+            .and_then(|v| v.get("findings"))
+            .and_then(|v| v.as_array())
+            .expect("findings");
+        let values: Vec<_> = findings
+            .iter()
+            .map(|f| f.get(field).and_then(|v| v.as_str()).expect("status"))
+            .collect();
+        assert_eq!(values, expected, "{}", result.payload_json);
+    }
+    no_authority(&result);
+    assert_eq!(
+        std::fs::read(workspace.join("draft.md")).expect("original draft"),
+        draft.as_bytes()
+    );
+}
+
+#[test]
 fn public_record_cut_checks_registered_publication_without_changing_cited_equality() {
     let (workspace, registry) = public_record_workspace("public-record-cited", Some("2030-05-01"));
     let profile = load_issuer_profile(&workspace, PUBLIC_RECORD_ISSUER)

@@ -9,13 +9,15 @@ use std::path::Path;
 use fmine_claim::{AdditivityClass, Representation, SpatialSupport};
 use fmine_core::hash::{Digest32, blake3_hash, sha256};
 use fmine_evidence::{EvidenceClass, KnowledgeState, Refusal, RefusalCode};
-use fmine_io::numtok::{Dec, Token, tokenize};
+use fmine_io::numtok::{Dec, Span, Token, tokenize};
 use fmine_metrics::roll_forward::quarter::{self, Observation, Printed, Quantity, Status};
 use fmine_numerics::exact_feas::Rat;
 use fmine_public::key::{
     KeyedCell, OwnershipBasis, Period, PeriodKind, PublicValue, Scope, canonical_value_tag,
 };
-use fmine_public::lint::{LintFinding, LintMode, LintReport, Verdict, equality_target, lint_cited};
+use fmine_public::lint::{
+    LintFinding, LintMode, LintReport, Verdict, equality_target, lint_cited, statement_spans,
+};
 use fmine_public::sources::{IssuerProfile, RegisteredSource};
 use fmine_registry::sources::{PUBLISHED_AT_BASES, is_date};
 
@@ -465,28 +467,24 @@ fn derivation(
     })
 }
 
-// Probe the original line without changing its prose or amount. Discovery stores the selected Claim id
+// Probe the original statement without changing its prose or amount. Discovery stores the selected Claim id
 // as metadata; its temporary comparison must insert a link. Cited findings already have a link to replace.
-fn probe(draft: &str, f: &LintFinding, c: &KeyedCell) -> Option<LintFinding> {
-    let before = draft.get(..f.span.0)?;
-    let after = draft.get(f.span.1..)?;
-    let start = before.rfind('\n').map_or(0, |i| i + 1);
-    let end = after.find('\n').map_or(draft.len(), |i| f.span.1 + i);
-    let line = draft.get(start..end)?;
+fn probe(draft: &str, (start, end): Span, f: &LintFinding, c: &KeyedCell) -> Option<LintFinding> {
+    let statement = draft.get(start..end)?;
     let span = (f.span.0 - start, f.span.1 - start);
     let id = c.claim.claim_id.to_string();
     let (text, expected) = match (f.mode, &f.claim_id) {
         (LintMode::Cited, Some(original)) if original.len() == id.len() => (
-            line.replace(&format!("fmine:{original}"), &format!("fmine:{id}")),
+            statement.replace(&format!("fmine:{original}"), &format!("fmine:{id}")),
             span,
         ),
         (LintMode::Cited, Some(_)) => return None,
         _ => (
             format!(
                 "{}[{}](fmine:{id}){}",
-                &line[..span.0],
-                &line[span.0..span.1],
-                &line[span.1..]
+                &statement[..span.0],
+                &statement[span.0..span.1],
+                &statement[span.1..]
             ),
             (span.0 + 1, span.1 + 1),
         ),
@@ -599,6 +597,7 @@ pub(super) fn assess(
             .push(c);
     }
     let mut findings = Vec::with_capacity(lint.findings.len());
+    let statements = statement_spans(draft);
     for f in &lint.findings {
         let mut keys: BTreeSet<_> = f
             .source
@@ -623,12 +622,17 @@ pub(super) fn assess(
             cost_rate: None,
         };
         if keys.len() == 1 {
+            let statement = statements
+                .get(statements.partition_point(|&(_, end)| end <= f.span.0))
+                .copied()
+                .filter(|&(start, end)| start <= f.span.0 && f.span.1 <= end);
             let candidates = keys.iter().next().and_then(|k| index.get(k));
             let ambiguous_share = candidates.is_some_and(|c| ambiguous_attributable_shares(f, c));
             for c in candidates.into_iter().flatten() {
                 let mut evidence = source_evidence(c, profile, &publications, as_of);
                 if evidence.admission != "unusable" {
-                    evidence.relation = relation(probe(draft, f, c).as_ref());
+                    evidence.relation =
+                        relation(statement.and_then(|s| probe(draft, s, f, c)).as_ref());
                 }
                 result.evidence.push(evidence);
             }

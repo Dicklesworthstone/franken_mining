@@ -139,6 +139,9 @@ The public lane of M0 (`fmine assure public`).
   source assertions. It indexes Claim IDs and latest series once, then compares the named subject, supported
   metric, period, ownership, denominator and unit. Exact rational half-step intervals decide containment,
   disjoint values and excessive precision; no floating-point tolerance or implicit unit conversion is used.
+  Ordinary Markdown paragraph wraps are whitespace for cited and discovered equality checks, including
+  the shared dated equality interpreter. Original UTF-8 spans remain authoritative. Blank lines, hard breaks
+  and Markdown structural lines bound the context separately from sentence punctuation.
   Dated nine-month cumulative equalities use the existing canonical `NineMonths` period in cited checks,
   discovery and publicness queries. They stay distinct from H1, Q3 and FY; no year is supplied for undated prose.
   AISC, total cash costs, copper C1, cost of sales, gold/copper production, gold sales, processed/head grade

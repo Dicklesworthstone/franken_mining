@@ -3552,6 +3552,10 @@ predicates; negations, comparisons and other prose remain `unchecked`. A matchin
 a wrong site, period, metric or basis. `verified` means agreement with the cited source assertion, not that the
 issuer assertion is true or that disclosure is permitted. `--through` selects registered source vintages.
 
+Ordinary Markdown line wraps within a paragraph preserve the statement and the cited number's original
+byte span. Use a blank line or a Markdown hard break to separate statements that have no terminal punctuation.
+Headings, lists, block quotes, table rows and fenced sections keep their line boundaries.
+
 DESIGN (BD-345.S4): `--as-of YYYY-MM-DD` adds an independent public-record assessment for each supported
 equality. It reports the earliest matching dated registered assertion, its exact Claim, locator, file hash,
 publication date and the date's stated basis. Other-basis matches, contradictory values, unsupported precision,
