@@ -1662,7 +1662,10 @@ mod tests {
         // BD-285 adds twin pairs, G-TWIN and the RC smearing monitor (fmine-drill::twin).
         // BD-286 adds the campaign data checks and their statistics (fmine-drill::checks, fmine-drill::stats).
         // bd-zx57 adds survey-error propagation (fmine-drill::survey_error).
-        assert_eq!(report.bitwise_files, 154, "{report:?}");
+        // BD-119 adds three service modules: lib, config and node.
+        // BD-188 adds the portable acQuire compositing adapter.
+        // Corebox QA/QC adds eight modules: lib, censored, crm, duplicates, error, insertion, monitors and stats.
+        assert_eq!(report.bitwise_files, 166, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.
