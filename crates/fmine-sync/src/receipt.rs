@@ -314,7 +314,9 @@ impl ResumableTransfer {
 }
 
 fn persist_receipt(receipt: &ObSealReceipt, path: &Path) -> Result<(), SyncError> {
-    if let Some(parent) = path.parent() {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
         fs::create_dir_all(parent).map_err(|e| {
             SyncError::Cas(CasError::Io {
                 operation: "create receipt parent dir",
@@ -356,6 +358,7 @@ fn persist_receipt(receipt: &ObSealReceipt, path: &Path) -> Result<(), SyncError
         })
     })?;
     if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
         && let Ok(dir) = fs::File::open(parent)
     {
         let _ = dir.sync_all();

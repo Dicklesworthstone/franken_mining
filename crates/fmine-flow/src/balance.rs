@@ -492,6 +492,13 @@ fn encode_extensive(enc: &mut Encoder, q: &ExtensiveQuantities) -> Result<(), Fl
             ),
         });
     }
+    for el in q.elements.keys() {
+        if el.is_empty() || el.trim() != el || el.len() > MAX_ID_BYTES {
+            return Err(FlowError::InvalidQuantity {
+                detail: format!("invalid element symbol {el:?}"),
+            });
+        }
+    }
     encode_qty(enc, q.dry_mass);
     encode_qty(enc, q.water_mass);
     enc.put_u32(q.elements.len() as u32);
@@ -805,8 +812,17 @@ pub fn conservation_witness(period_id: &str, report: &BalanceReport) -> Result<W
         enc.put_str(el);
         encode_qty(&mut enc, res);
     }
-    enc.put_u32(report.node_residuals.len() as u32);
+    let mut canonical_nodes: BTreeMap<&str, &NodeResidual> = BTreeMap::new();
     for nr in &report.node_residuals {
+        if canonical_nodes.insert(nr.node_id.as_str(), nr).is_some() {
+            return Err(FlowError::DuplicateId {
+                kind: "node_residual",
+                id: nr.node_id.clone(),
+            });
+        }
+    }
+    enc.put_u32(canonical_nodes.len() as u32);
+    for nr in canonical_nodes.values() {
         enc.put_str(&nr.node_id);
         encode_qty(&mut enc, nr.dry_mass_residual);
         encode_qty(&mut enc, nr.water_mass_residual);
@@ -824,16 +840,54 @@ pub fn conservation_witness(period_id: &str, report: &BalanceReport) -> Result<W
     ))
 }
 
+fn check_period_continuity(
+    prev_rec: &PeriodBalanceRecord,
+    cur_rec: &PeriodBalanceRecord,
+) -> Result<(), String> {
+    let prev_closing: BTreeMap<&str, &ExtensiveQuantities> = prev_rec
+        .inventories
+        .iter()
+        .map(|inv| (inv.node_id.as_str(), &inv.closing))
+        .collect();
+    let mut seen_nodes: BTreeMap<&str, ()> = BTreeMap::new();
+    for cur_inv in &cur_rec.inventories {
+        seen_nodes.insert(cur_inv.node_id.as_str(), ());
+        let Some(&prior) = prev_closing.get(cur_inv.node_id.as_str()) else {
+            return Err(format!(
+                "FMINE-REF-101: node '{}' opening inventory in '{}' has no matching closing inventory in previous period '{}'",
+                cur_inv.node_id, cur_rec.period_id, prev_rec.period_id
+            ));
+        };
+        if !extensive_equal(&cur_inv.opening, prior) {
+            return Err(format!(
+                "FMINE-REF-101: cross-period inventory continuity violated at node '{}' between '{}' closing and '{}' opening (no hidden plug)",
+                cur_inv.node_id, prev_rec.period_id, cur_rec.period_id
+            ));
+        }
+    }
+    let zero_qty = ExtensiveQuantities::zero();
+    for (prior_node, prior_close) in &prev_closing {
+        if !seen_nodes.contains_key(prior_node) && !extensive_equal(prior_close, &zero_qty) {
+            return Err(format!(
+                "FMINE-REF-101: node '{prior_node}' carried non-zero closing inventory in '{}' but was omitted from '{}' inventories",
+                prev_rec.period_id, cur_rec.period_id
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Commit-time conservation law (`BD-147`, `INV-005`, `PO-BED-6`) for `L0Ledger::commit_with_conservation`,
 /// `SemanticSegmentWriter::append_with_law`, and `SemanticSegmentWriter::commit_prepared_with_law`.
 ///
-/// Inspects every delta under [`FLOW_BALANCE_KEY_PREFIX`] in `batch`, decodes its canonical
-/// [`PeriodBalanceRecord`], verifies exact extensive conservation across every interior node of
-/// `graph` within `tolerance`, checks cross-period inventory continuity (`current.opening ==
-/// previous.closing`) against prior committed state in `ledger` (or earlier in the same batch),
-/// and verifies any attached `WitnessKind::Conservation` digest. Any failure returns `Err(...)`,
-/// causing `fmine-ledger` to refuse the commit with `L0Error::ConservationViolation` (`FMINE-REF-101`,
-/// exit 3) and leave both L0 and L1 state untouched.
+/// Inspects every delta under [`FLOW_BALANCE_KEY_PREFIX`] in `batch` in two passes (order-independent
+/// across multi-period batches), decodes each canonical [`PeriodBalanceRecord`], verifies exact
+/// extensive conservation across every interior node of `graph` within `tolerance`, checks
+/// cross-period inventory continuity (`current.opening == previous.closing`) both backward against
+/// prior committed/in-batch periods and forward against any already-committed successor period when
+/// superseding an earlier period, and verifies all attached `WitnessKind::Conservation` digests.
+/// Any failure returns `Err(...)`, causing `fmine-ledger` to refuse the commit with
+/// `L0Error::ConservationViolation` (`FMINE-REF-101`, exit 3) and leave both L0 and L1 untouched.
 pub fn check_batch_conservation(
     graph: &FlowGraph,
     tolerance: &BalanceTolerance,
@@ -841,7 +895,13 @@ pub fn check_batch_conservation(
     batch: &DeltaBatch,
 ) -> Result<(), String> {
     validate_tolerance(tolerance).map_err(|e| format!("{} ({})", e.to_refusal().code, e))?;
+
+    // Pass 1: decode every flow/period/ delta, verify single-period conservation, and collect
+    // expected conservation witnesses. Doing this before continuity checks ensures multi-period
+    // batches do not depend on lexicographic key order (e.g. "P10" sorting before "P9").
     let mut in_batch_records: BTreeMap<String, PeriodBalanceRecord> = BTreeMap::new();
+    let mut expected_witnesses: BTreeMap<String, fmine_core::hash::Digest32> = BTreeMap::new();
+    let mut superseded_periods: BTreeMap<String, ()> = BTreeMap::new();
 
     for op in &batch.deltas {
         if !op.key.starts_with(FLOW_BALANCE_KEY_PREFIX) {
@@ -868,6 +928,59 @@ pub fn check_batch_conservation(
         }
         let report = verify_period_balance(graph, &rec.flows, &rec.inventories, tolerance)
             .map_err(|e| format!("{} ({})", e.to_refusal().code, e))?;
+        let expected_witness = conservation_witness(&rec.period_id, &report)
+            .map_err(|e| format!("FMINE-REF-101: witness derivation failed: {e}"))?;
+
+        if op.kind == DeltaKind::Supersede {
+            superseded_periods.insert(rec.period_id.clone(), ());
+        }
+        if in_batch_records
+            .insert(rec.period_id.clone(), rec)
+            .is_some()
+        {
+            return Err(format!(
+                "FMINE-REF-101: duplicate flow period key '{}' in batch",
+                op.key
+            ));
+        }
+        expected_witnesses.insert(op.key.clone(), expected_witness.digest);
+    }
+
+    // Verify all attached flow conservation witnesses (refuse mismatched or orphaned witnesses).
+    for w in &batch.witnesses {
+        if w.kind == WitnessKind::Conservation && w.subject_id.starts_with(FLOW_BALANCE_KEY_PREFIX)
+        {
+            let Some(&expected_digest) = expected_witnesses.get(&w.subject_id) else {
+                return Err(format!(
+                    "FMINE-REF-101: orphaned conservation witness for '{}' with no matching flow period delta in batch",
+                    w.subject_id
+                ));
+            };
+            if w.digest != expected_digest {
+                return Err(format!(
+                    "FMINE-REF-101: conservation witness digest mismatch on '{}' (expected {}, got {})",
+                    w.subject_id, expected_digest, w.digest
+                ));
+            }
+        }
+    }
+
+    // Pass 2: verify backward cross-period continuity (and guard against in-batch cycles).
+    for rec in in_batch_records.values() {
+        let mut cursor = rec.previous_period_id.as_deref();
+        let mut hops = 0usize;
+        while let Some(prev_id) = cursor {
+            if prev_id == rec.period_id || hops > in_batch_records.len() {
+                return Err(format!(
+                    "FMINE-REF-101: cyclic previous_period_id chain involving '{}'",
+                    rec.period_id
+                ));
+            }
+            hops += 1;
+            cursor = in_batch_records
+                .get(prev_id)
+                .and_then(|r| r.previous_period_id.as_deref());
+        }
 
         if let Some(prev_id) = &rec.previous_period_id {
             let prev_rec = if let Some(in_batch) = in_batch_records.get(prev_id) {
@@ -892,55 +1005,37 @@ pub fn check_batch_conservation(
                     )
                 })?
             };
-
-            let prev_closing: BTreeMap<&str, &ExtensiveQuantities> = prev_rec
-                .inventories
-                .iter()
-                .map(|inv| (inv.node_id.as_str(), &inv.closing))
-                .collect();
-            let mut seen_nodes: BTreeMap<&str, ()> = BTreeMap::new();
-            for cur_inv in &rec.inventories {
-                seen_nodes.insert(cur_inv.node_id.as_str(), ());
-                let Some(&prior) = prev_closing.get(cur_inv.node_id.as_str()) else {
-                    return Err(format!(
-                        "FMINE-REF-101: node '{}' opening inventory in '{}' has no matching closing inventory in previous period '{prev_id}'",
-                        cur_inv.node_id, rec.period_id
-                    ));
-                };
-                if !extensive_equal(&cur_inv.opening, prior) {
-                    return Err(format!(
-                        "FMINE-REF-101: cross-period inventory continuity violated at node '{}' between '{prev_id}' closing and '{}' opening (no hidden plug)",
-                        cur_inv.node_id, rec.period_id
-                    ));
-                }
-            }
-            let zero_qty = ExtensiveQuantities::zero();
-            for (prior_node, prior_close) in &prev_closing {
-                if !seen_nodes.contains_key(prior_node) && !extensive_equal(prior_close, &zero_qty)
-                {
-                    return Err(format!(
-                        "FMINE-REF-101: node '{prior_node}' carried non-zero closing inventory in '{prev_id}' but was omitted from '{}' inventories",
-                        rec.period_id
-                    ));
-                }
-            }
+            check_period_continuity(&prev_rec, rec)?;
         }
+    }
 
-        let expected_witness = conservation_witness(&rec.period_id, &report)
-            .map_err(|e| format!("FMINE-REF-101: witness derivation failed: {e}"))?;
-        for w in &batch.witnesses {
-            if w.kind == WitnessKind::Conservation
-                && w.subject_id == op.key
-                && w.digest != expected_witness.digest
+    // Pass 3: if this batch supersedes any existing period P, verify that no already-committed
+    // successor period Q (not also superseded in this same batch) breaks continuity against P's
+    // new closing inventory (prevents retroactive supersede plugs across period boundaries).
+    if !superseded_periods.is_empty() {
+        let committed = ledger
+            .committed_count(&batch.cell_id)
+            .map_err(|e| format!("FMINE-REF-101: failed reading cell committed_count: {e}"))?;
+        let snap = ledger
+            .as_of_seq(&batch.cell_id, committed)
+            .map_err(|e| format!("FMINE-REF-101: failed reading cell snapshot: {e}"))?;
+        for (key, version) in &snap.live_keys {
+            if !key.starts_with(FLOW_BALANCE_KEY_PREFIX) {
+                continue;
+            }
+            let committed_rec = PeriodBalanceRecord::from_bytes(&version.payload).map_err(|e| {
+                format!("FMINE-REF-101: committed flow period '{key}' payload corrupt: {e}")
+            })?;
+            if in_batch_records.contains_key(&committed_rec.period_id) {
+                continue;
+            }
+            if let Some(prev_id) = &committed_rec.previous_period_id
+                && superseded_periods.contains_key(prev_id)
+                && let Some(new_prev) = in_batch_records.get(prev_id)
             {
-                return Err(format!(
-                    "FMINE-REF-101: conservation witness digest mismatch on '{}' (expected {}, got {})",
-                    op.key, expected_witness.digest, w.digest
-                ));
+                check_period_continuity(new_prev, &committed_rec)?;
             }
         }
-
-        in_batch_records.insert(rec.period_id.clone(), rec);
     }
 
     Ok(())

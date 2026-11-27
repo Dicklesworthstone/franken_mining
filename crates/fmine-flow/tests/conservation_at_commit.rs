@@ -433,3 +433,107 @@ fn test_po_bed_6_conservation_enforced_under_l1_narrow_combiner_rebase() {
 
     let _ = fs::remove_dir_all(seg_path.parent().expect("parent"));
 }
+
+#[test]
+fn test_po_bed_6_order_independent_multi_period_batch_retroactive_supersede_and_orphaned_witness() {
+    let graph = site_graph();
+    let tol = BalanceTolerance::exact_zero();
+    let law = conservation_commit_law(&graph, &tol);
+
+    let mut l0 = L0Ledger::new();
+    let lease = l0.create_cell(CELL_FLOW, "writer-1").expect("create");
+
+    // 1. Multi-period single batch where lexicographic key order ("P10" < "P9") reverses
+    //    chronological order ("P10" depends on "P9") MUST succeed!
+    let mut p9 = balanced_period_1();
+    p9.period_id = "P9".to_string();
+    let mut p10 = balanced_period_2();
+    p10.period_id = "P10".to_string();
+    p10.previous_period_id = Some("P9".to_string());
+
+    let multi_batch = build_batch(
+        CELL_FLOW,
+        lease.epoch,
+        0,
+        l0.head_hash(CELL_FLOW).expect("head 0"),
+        vec![
+            p10.into_delta_op(DeltaKind::Put).expect("p10"),
+            p9.into_delta_op(DeltaKind::Put).expect("p9"),
+        ],
+        Vec::new(),
+    );
+    let d0 = l0
+        .commit_with_conservation(&lease, multi_batch, &law)
+        .expect("order-independent multi-period batch must commit");
+
+    // 2. Retroactively superseding P9 to a different closing inventory WITHOUT updating P10 MUST
+    //    refuse with FMINE-REF-101 (prevents phantom cross-period plug!).
+    let mut p9_shifted = p9.clone();
+    p9_shifted.flows[0].quantities = qty(1010, 50, 2000);
+    p9_shifted.inventories[0].closing = qty(710, 35, 1400); // balanced internally, breaks P10!
+    let bad_supersede = build_batch(
+        CELL_FLOW,
+        lease.epoch,
+        1,
+        d0,
+        vec![p9_shifted.into_delta_op(DeltaKind::Supersede).expect("sup")],
+        Vec::new(),
+    );
+    assert_eq!(
+        l0.commit_with_conservation(&lease, bad_supersede, &law)
+            .expect_err("retroactive supersede breaking successor continuity must refuse")
+            .to_refusal()
+            .code,
+        "FMINE-REF-101"
+    );
+
+    // 3. Jointly superseding BOTH P9 and P10 in one atomic batch with matching handoff commits!
+    let mut p10_shifted = p10.clone();
+    p10_shifted.inventories[0].opening = qty(710, 35, 1400);
+    p10_shifted.inventories[0].closing = qty(610, 30, 1200);
+    let joint_supersede = build_batch(
+        CELL_FLOW,
+        lease.epoch,
+        1,
+        d0,
+        vec![
+            p9_shifted.into_delta_op(DeltaKind::Supersede).expect("s9"),
+            p10_shifted
+                .into_delta_op(DeltaKind::Supersede)
+                .expect("s10"),
+        ],
+        Vec::new(),
+    );
+    let d1 = l0
+        .commit_with_conservation(&lease, joint_supersede, &law)
+        .expect("joint atomic supersede preserving continuity commits");
+
+    // 4. Orphaned WitnessKind::Conservation for a non-present flow/period/ key refuses FMINE-REF-101!
+    let orphaned = build_batch(
+        CELL_FLOW,
+        lease.epoch,
+        2,
+        d1,
+        vec![DeltaOp::new("meta/note", DeltaKind::Put, b"ok".to_vec())],
+        vec![Witness::new(
+            WitnessKind::Conservation,
+            "flow/period/2099-99",
+            sha256(b"orphan"),
+        )],
+    );
+    assert_eq!(
+        l0.commit_with_conservation(&lease, orphaned, &law)
+            .expect_err("orphaned flow conservation witness must refuse")
+            .to_refusal()
+            .code,
+        "FMINE-REF-101"
+    );
+
+    // 5. Untrimmed element symbol refuses at encode time (to_bytes never emits undecodable bytes).
+    let mut bad_el = balanced_period_1();
+    bad_el.flows[0]
+        .quantities
+        .elements
+        .insert(" Au ".to_string(), ExactQty::from_integer(1));
+    assert!(bad_el.to_bytes().is_err());
+}
