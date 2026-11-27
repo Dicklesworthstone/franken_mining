@@ -6,6 +6,9 @@
 //!   [`Trace`] and measures the distance between the two midpoints. The pair's separation is the largest of
 //!   these. Above the policy limit (default 5 m, [`DEFAULT_SEPARATION_LIMIT_MM`]) the pair is a
 //!   [`TwinState::WeakTwin`] (E375, E376). A twin collared close by can still drift past the limit at depth.
+//! - **Separation uncertainty.** [`separation_uncertainty`] gives each matched pair's separation the one-sigma of
+//!   the two holes' survey-error covariances along the line between the midpoints ([`crate::survey_error`]), and
+//!   the probability that the true separation is beyond the limit.
 //! - **Agreement.** Over the matched grades (original `a`, twin `b`, one unit): the average relative variance
 //!   coefficient `CV_AVR% = 100·√((2/N)·Σ(a−b)²/(a+b)²)` over the `N` pairs with `a + b > 0` (plan §12.2); the
 //!   reduced-major-axis slope of twin on original, `sign(r)·s_b/s_a`; and a paired t-test on `b − a`, with its
@@ -21,7 +24,7 @@ use std::collections::BTreeSet;
 use fmine_core::det;
 use fmine_ledger::l0::L0Ledger;
 
-use crate::desurvey::{Point, Trace};
+use crate::desurvey::{Direction, Point, Trace};
 use crate::join::{Span, self_overlaps};
 use crate::records::{
     Collar, DrillError, DrillRecord, HoleType, Interval, RecordKind, TwinPair, check_ids,
@@ -29,6 +32,7 @@ use crate::records::{
 };
 use crate::stats::{normal_cdf, t_two_sided_p};
 use crate::store::{StoreError, current};
+use crate::survey_error::UncertainTrace;
 
 /// The default separation above which a pair is a [`TwinState::WeakTwin`], mm (plan §12.1).
 pub const DEFAULT_SEPARATION_LIMIT_MM: u64 = 5_000;
@@ -236,6 +240,95 @@ pub fn assess_twin(
         paired: paired_test(grades),
         pairs,
     })
+}
+
+/// One matched pair's separation with its survey-error uncertainty.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SeparationUncertainty {
+    /// The original hole's interval.
+    pub original_interval_id: String,
+    /// The twin's interval.
+    pub twin_interval_id: String,
+    /// The separation, m, as assessed.
+    pub separation_m: f64,
+    /// One-sigma of the separation along the line between the midpoints, m: the two holes' errors are taken as
+    /// independent. At zero separation, the root of the summed covariance's trace.
+    pub sigma_m: f64,
+    /// `Φ((separation − limit)/σ)`, the normal approximation to the probability that the true separation is
+    /// beyond the policy limit; 0 or 1 when `σ` is zero.
+    pub p_beyond_limit: f64,
+}
+
+/// The survey-error uncertainty of each matched pair's separation in `assessment` (`bd-zx57`), from the two
+/// holes' traces with their error models.
+///
+/// # Errors
+/// [`DrillError::Invalid`] (`FMINE-REF-109`) for a matched interval not offered or not in its trace's hole, or an
+/// assessment that these traces do not reproduce: a pair's separation differs, so it was made from other surveys.
+pub fn separation_uncertainty(
+    assessment: &TwinAssessment,
+    original: &UncertainTrace,
+    twin: &UncertainTrace,
+    intervals: &[Interval],
+) -> Result<Vec<SeparationUncertainty>, DrillError> {
+    let midpoint = |id: &str, trace: &UncertainTrace| -> Result<u64, DrillError> {
+        let hole = trace.trace().hole_id();
+        match intervals.iter().find(|i| i.interval_id == id) {
+            Some(i) if i.hole_id == hole => Ok(midpoint_mm(i)),
+            _ => Err(DrillError::invalid(
+                "twin.matches",
+                format!("interval '{id}' is not offered in hole '{hole}'"),
+            )),
+        }
+    };
+    let mut out = Vec::with_capacity(assessment.pairs.len());
+    for pair in &assessment.pairs {
+        let (da, db) = (
+            midpoint(&pair.original_interval_id, original)?,
+            midpoint(&pair.twin_interval_id, twin)?,
+        );
+        let (a, b) = (original.trace().at(da).point, twin.trace().at(db).point);
+        let separation = distance(a, b);
+        if separation.to_bits() != pair.separation_m.to_bits() {
+            return Err(DrillError::invalid(
+                "twin.separation",
+                format!(
+                    "pair '{}'/'{}' is {separation} m apart on these traces, {} m as assessed",
+                    pair.original_interval_id, pair.twin_interval_id, pair.separation_m
+                ),
+            ));
+        }
+        let (ca, cb) = (
+            original.covariance_at(da).total,
+            twin.covariance_at(db).total,
+        );
+        let variance = if separation > 0.0 {
+            let u = Direction {
+                east: (b.easting_m - a.easting_m) / separation,
+                north: (b.northing_m - a.northing_m) / separation,
+                up: (b.elevation_m - a.elevation_m) / separation,
+            };
+            ca.variance_along(u) + cb.variance_along(u)
+        } else {
+            (0..3).map(|i| ca.enu_m2[i][i] + cb.enu_m2[i][i]).sum()
+        };
+        let sigma = det::sqrt(variance.max(0.0));
+        let beyond = separation - assessment.limit_m;
+        out.push(SeparationUncertainty {
+            original_interval_id: pair.original_interval_id.clone(),
+            twin_interval_id: pair.twin_interval_id.clone(),
+            separation_m: separation,
+            sigma_m: sigma,
+            p_beyond_limit: if sigma > 0.0 {
+                normal_cdf(beyond / sigma)
+            } else if beyond > 0.0 {
+                1.0
+            } else {
+                0.0
+            },
+        });
+    }
+    Ok(out)
 }
 
 const fn midpoint_mm(interval: &Interval) -> u64 {

@@ -18,9 +18,11 @@ use fmine_drill::records::{
     TwinMatch, TwinPair,
 };
 use fmine_drill::store::{Change, StoreError, commit};
+use fmine_drill::survey_error::{ErrorModel, propagate};
 use fmine_drill::twin::{
     Admission, DownholeGrade, EstimateBasis, PairGrade, SmearingPolicy, SmearingState,
-    TwinCorrection, TwinPolicy, TwinState, admit_twin_correction, assess_twin, smearing_monitor,
+    TwinCorrection, TwinPolicy, TwinState, admit_twin_correction, assess_twin,
+    separation_uncertainty, smearing_monitor,
 };
 use fmine_evidence::RefusalCode;
 use fmine_ledger::l0::L0Ledger;
@@ -755,4 +757,100 @@ fn test_the_smearing_statistic_has_its_known_answers_and_refuses_what_it_cannot_
         field(smearing_monitor(&rc, &[ORE], &negative, &policy)),
         "smearing.grades"
     );
+}
+
+#[test]
+fn test_a_twin_separation_carries_the_two_holes_survey_error() {
+    // Parallel holes dipping 60° to grid north, the twin offset east. A dip error moves a point north and up; an
+    // azimuth error moves it east by cos 60° per radian, times the station weights at 41 m of stations every
+    // 25 m: 12.5, 12.5 + f·h·(2 − f)/2 and f²·h/2 with h = 25 and f = 0.64.
+    let depths = [0, 25_000, 50_000, 75_000, 100_000];
+    let surveys = |hole_id: &str, dip: f64| -> Vec<Survey> {
+        depths
+            .iter()
+            .map(|&d| station(hole_id, d, 0.0, dip))
+            .collect()
+    };
+    let (h, f) = (25.0_f64, 0.64_f64);
+    let w = [12.5, 12.5 + f * h * (2.0 - f) / 2.0, f * f * h / 2.0];
+    let w2: f64 = w.iter().map(|x| x * x).sum();
+    let sigma_az = 0.5_f64.to_radians();
+    let per_hole = 0.05_f64.powi(2) + sigma_az * sigma_az * 0.25 * w2;
+    let want_sigma = (2.0 * per_hole).sqrt();
+
+    let original = hole("O", E0, HoleType::Diamond);
+    let original_surveys = surveys("O", -60.0);
+    let o = propagate(&original, &original_surveys, &ErrorModel::random()).unwrap();
+    for offset in [2.0, 4.9, 5.2] {
+        let twin = hole("T", E0 + offset, HoleType::Diamond);
+        let twin_surveys = surveys("T", -60.0);
+        let ivs = vec![
+            interval("O-I1", "O", 40_000, 42_000),
+            interval("T-I1", "T", 40_000, 42_000),
+        ];
+        let record = TwinPair {
+            twin_id: "TW-1".to_string(),
+            original_hole_id: "O".to_string(),
+            twin_hole_id: "T".to_string(),
+            matches: vec![TwinMatch {
+                original_interval_id: "O-I1".to_string(),
+                twin_interval_id: "T-I1".to_string(),
+            }],
+        };
+        let assessment = assess_twin(
+            &record,
+            &desurvey(&original, &original_surveys).unwrap(),
+            &desurvey(&twin, &twin_surveys).unwrap(),
+            &ivs,
+            &[PairGrade {
+                original: 1.0,
+                twin: 1.1,
+            }],
+            &TwinPolicy::default(),
+        )
+        .unwrap();
+        let t = propagate(&twin, &twin_surveys, &ErrorModel::random()).unwrap();
+        let u = separation_uncertainty(&assessment, &o, &t, &ivs).unwrap();
+        assert_eq!(u.len(), 1);
+        let got = &u[0];
+        assert!((got.separation_m - offset).abs() < 1e-9, "{got:?}");
+        assert!(
+            (got.sigma_m - want_sigma).abs() < 1e-9 * want_sigma,
+            "{} vs {want_sigma}",
+            got.sigma_m
+        );
+        let z = (got.separation_m - 5.0) / got.sigma_m;
+        if z > -3.0 {
+            assert_eq!(got.p_beyond_limit, fmine_core::det::norm_cdf(z));
+        } else {
+            assert!(
+                got.p_beyond_limit > 0.0 && got.p_beyond_limit < 1e-50,
+                "{got:?}"
+            );
+        }
+        println!(
+            "offset {offset} m: {:?}, sigma {:.4} m, P(beyond 5 m) {:.4e}",
+            assessment.state, got.sigma_m, got.p_beyond_limit
+        );
+        if offset == 4.9 {
+            // A twin by the limit, with even odds of being weak: 4.9 m is 0.55 sigma inside it.
+            assert_eq!(assessment.state, TwinState::Twin);
+            assert!(got.p_beyond_limit > 0.25 && got.p_beyond_limit < 0.35);
+        }
+
+        // An assessment made from other surveys, or intervals of another hole, are refused.
+        let steeper = propagate(&twin, &surveys("T", -61.0), &ErrorModel::random()).unwrap();
+        let field = |e: DrillError| match e {
+            DrillError::Invalid { field, .. } => field,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            field(separation_uncertainty(&assessment, &o, &steeper, &ivs).unwrap_err()),
+            "twin.separation"
+        );
+        assert_eq!(
+            field(separation_uncertainty(&assessment, &t, &o, &ivs).unwrap_err()),
+            "twin.matches"
+        );
+    }
 }
