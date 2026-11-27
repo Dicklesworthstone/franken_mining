@@ -2762,6 +2762,12 @@ Assumed and Internal. A diagnostic does not classify the cause of a miss, recali
 an authoritative InvestigationCase or authorize any physical action. Source/parse/domain refusals
 produce the normal structured envelope without writing the input.
 
+DESIGN (bd-5tjn): `--as-of-ns` selects an inclusive declared availability cutoff in nonnegative UTC
+Unix nanoseconds. The source-bound `fmine.spatial-assessment.as-of.v1` assessment includes the cutoff
+as an exact decimal string and retains only admitted inputs and diagnostics. The policy must have been
+declared by that time. The worksheet must parse and every row must have a timestamp in strictly
+increasing order. The full worksheet hash remains bound to the receipt, and all times are operator declarations.
+
 The synthetic command fixture is `tests/forecasts/spatial_synthetic.toml`. Actual-binary controls in
 `crates/xtask/testdata/spatial_monitor_command.rs`, included by the CLI test target, cover deterministic
 replay and source mutation, time ordering, scope/unit mismatch, nonfinite observations, usage errors and

@@ -88,6 +88,7 @@ pub struct SpatialSummary {
 pub struct SpatialReceipt {
     source: SourceAnchor,
     policy: Policy,
+    cutoff_ns: Option<i64>,
     inputs: Vec<Claim<String>>,
     rows: Vec<Claim<SpatialRow>>,
     claim: Claim<SpatialSummary>,
@@ -210,7 +211,12 @@ fn policy(items: &[TomlField]) -> Result<Policy> {
     Ok(result)
 }
 
-fn observation(items: &[TomlField], line: usize, policy: &Policy) -> Result<Observation> {
+fn observation(
+    items: &[TomlField],
+    line: usize,
+    policy: &Policy,
+    available_ns: i64,
+) -> Result<Observation> {
     fields(
         items,
         &[
@@ -245,7 +251,7 @@ fn observation(items: &[TomlField], line: usize, policy: &Policy) -> Result<Obse
     }
     let observation = Observation {
         id: text(items, "id")?.into(),
-        available_ns: integer(items, "available_ns")?,
+        available_ns,
         prediction_registered_ns: integer(items, "prediction_registered_ns")?,
         sample: SpatialSample {
             x: number(items, "x_m")?,
@@ -305,6 +311,16 @@ fn source_claim<T>(
 /// Parse supplied bytes and replay their declared order without IO or external authority.
 /// Admission and calculation are transactional: an unusable row refuses the complete receipt.
 pub fn evaluate(text: &str, source: SourceAnchor) -> Result<SpatialReceipt> {
+    evaluate_at(text, source, None)
+}
+
+/// Replay only observations whose declared availability is at or before `cutoff_ns`.
+/// The full source hash is retained, and every row must declare its availability in strict order.
+pub fn evaluate_as_of(text: &str, source: SourceAnchor, cutoff_ns: i64) -> Result<SpatialReceipt> {
+    evaluate_at(text, source, Some(cutoff_ns))
+}
+
+fn evaluate_at(text: &str, source: SourceAnchor, cutoff_ns: Option<i64>) -> Result<SpatialReceipt> {
     if text.len() as u64 > MAX_BYTES {
         return Err(invalid(1, "worksheet exceeds four MiB"));
     }
@@ -325,6 +341,12 @@ pub fn evaluate(text: &str, source: SourceAnchor) -> Result<SpatialReceipt> {
         return Err(invalid(1, "expected one through 4096 observations"));
     }
     let policy = policy(&document.top)?;
+    if cutoff_ns.is_some_and(|cutoff| cutoff < policy.registered_ns) {
+        return Err(Refusal::new(
+            RefusalCode::LateRegistration206,
+            "spatial monitor policy was registered after the declared availability cutoff",
+        ));
+    }
     let physical_support = support(&policy.support)?;
     let mut monitor = SpatialFrontPitMonitor::new(
         policy.nugget_var,
@@ -346,14 +368,18 @@ pub fn evaluate(text: &str, source: SourceAnchor) -> Result<SpatialReceipt> {
         if row.table != "observation" {
             return Err(invalid(row.line, format!("unknown table {}", row.table)));
         }
-        let value = observation(&row.fields, row.line, &policy)?;
-        if !ids.insert(value.id.clone()) {
-            return Err(invalid(
-                row.line,
-                format!("duplicate observation {}", value.id),
-            ));
+        let available_ns = integer(&row.fields, "available_ns")?;
+        if cutoff_ns.is_none_or(|cutoff| available_ns <= cutoff) {
+            let value = observation(&row.fields, row.line, &policy, available_ns)?;
+            if !ids.insert(value.id.clone()) {
+                return Err(invalid(
+                    row.line,
+                    format!("duplicate observation {}", value.id),
+                ));
+            }
+            observations.push((value, row.line));
         }
-        if value.available_ns <= previous_time {
+        if available_ns <= previous_time {
             return Err(Refusal::new(
                 RefusalCode::LateRegistration206,
                 format!(
@@ -362,8 +388,7 @@ pub fn evaluate(text: &str, source: SourceAnchor) -> Result<SpatialReceipt> {
                 ),
             ));
         }
-        previous_time = value.available_ns;
-        observations.push((value, row.line));
+        previous_time = available_ns;
     }
     let policy_value = policy_json(&policy);
     let policy_tag = blake3_hash(policy_value.as_bytes()).to_hex();
@@ -469,7 +494,10 @@ pub fn evaluate(text: &str, source: SourceAnchor) -> Result<SpatialReceipt> {
         location_alarm: monitor.location_eproc.rejected_null(),
         dispersion_alarm: monitor.dispersion_eproc.rejected_null(),
     };
-    let mut frame = Encoder::new_frame(*b"SPAR", 1);
+    let mut frame = Encoder::new_frame(*b"SPAR", if cutoff_ns.is_some() { 2 } else { 1 });
+    if let Some(cutoff) = cutoff_ns {
+        frame.put_i64(cutoff);
+    }
     frame.put_str(METHOD);
     frame.put_str(NO_CLAIM);
     frame.put_str(&inputs[0].claim_id.to_string());
@@ -478,7 +506,11 @@ pub fn evaluate(text: &str, source: SourceAnchor) -> Result<SpatialReceipt> {
     }
     frame.put_str(&summary_json(&summary));
     let digest = blake3_hash(&frame.finish()).to_hex();
-    let parents = rows.iter().map(|row| row.claim_id).collect();
+    let parents = if rows.is_empty() {
+        vec![inputs[0].claim_id]
+    } else {
+        rows.iter().map(|row| row.claim_id).collect()
+    };
     let claim = source_claim(
         "spatial.monitor.assessment/1",
         summary,
@@ -490,6 +522,7 @@ pub fn evaluate(text: &str, source: SourceAnchor) -> Result<SpatialReceipt> {
     Ok(SpatialReceipt {
         source,
         policy,
+        cutoff_ns,
         inputs,
         rows,
         claim,
@@ -657,6 +690,14 @@ fn claim_markdown<T>(out: &mut String, claim: &Claim<T>) {
 }
 
 impl SpatialReceipt {
+    fn schema(&self) -> &'static str {
+        if self.cutoff_ns.is_some() {
+            "fmine.spatial-assessment.as-of.v1"
+        } else {
+            "fmine.spatial-assessment.v1"
+        }
+    }
+
     #[must_use]
     pub fn inputs(&self) -> &[Claim<String>] {
         &self.inputs
@@ -691,8 +732,13 @@ impl SpatialReceipt {
             .map(|row| claim_json(row, &row_json(&row.value, &self.policy)))
             .collect::<Vec<_>>()
             .join(",");
+        let cutoff = self
+            .cutoff_ns
+            .map(|time| format!(r#","as_of_ns":"{time}""#))
+            .unwrap_or_default();
         format!(
-            "{{\"schema\":\"fmine.spatial-assessment.v1\",\"digest\":{},\"method\":{},\"no_claim\":{},\"chronology\":\"operator-declared; no independent time proof\",\"source\":{{\"path\":{},\"sha256\":{},\"locator\":{}}},\"policy\":{},\"inputs\":[{inputs}],\"rows\":[{rows}],\"summary\":{}}}",
+            "{{\"schema\":{}{cutoff},\"digest\":{},\"method\":{},\"no_claim\":{},\"chronology\":\"operator-declared; no independent time proof\",\"source\":{{\"path\":{},\"sha256\":{},\"locator\":{}}},\"policy\":{},\"inputs\":[{inputs}],\"rows\":[{rows}],\"summary\":{}}}",
+            js(self.schema()),
             js(&self.digest),
             js(METHOD),
             js(NO_CLAIM),
@@ -707,7 +753,8 @@ impl SpatialReceipt {
     #[must_use]
     pub fn to_markdown(&self) -> String {
         let mut out = format!(
-            "# Spatial-front assessment\n\n{NO_CLAIM}\n\nMethod: {METHOD}\n\nSchema: fmine.spatial-assessment.v1. Calibration: descriptive.\n\nModel: {}. Unit: {}. Support: {}. Coordinate frame: {} (metres). These declarations apply to every observation.\n\nSource: {} (SHA-256 {}). Locator: {}. Receipt: {}.\n\nPolicy registration: {} ns (declared). Alpha: {}; nearest predecessors: {}. Variances: nugget {}, sill {}; range {} m. All registration and availability timestamps are nonnegative UTC Unix nanoseconds, declared by the operator without independent time proof.\n\nObservations: {}. Summary location alarm: {}. Summary dispersion alarm: {}.\n\n",
+            "# Spatial-front assessment\n\n{NO_CLAIM}\n\nMethod: {METHOD}\n\nSchema: {}. Calibration: descriptive.\n\nModel: {}. Unit: {}. Support: {}. Coordinate frame: {} (metres). These declarations apply to every observation.\n\nSource: {} (SHA-256 {}). Locator: {}. Receipt: {}.\n\nPolicy registration: {} ns (declared). Alpha: {}; nearest predecessors: {}. Variances: nugget {}, sill {}; range {} m. All registration and availability timestamps are nonnegative UTC Unix nanoseconds, declared by the operator without independent time proof.\n\nObservations: {}. Summary location alarm: {}. Summary dispersion alarm: {}.\n\n",
+            self.schema(),
             markdown(&self.policy.model_id),
             markdown(&self.policy.target_unit),
             markdown(&self.policy.support),
@@ -726,7 +773,15 @@ impl SpatialReceipt {
             self.claim.value.location_alarm,
             self.claim.value.dispersion_alarm
         );
-        if let Some(alarm) = &self.claim.value.first_alarm {
+        if let Some(cutoff) = self.cutoff_ns {
+            let _ = writeln!(
+                out,
+                "Declared availability cutoff: {cutoff} ns (inclusive). The source hash retains the complete worksheet.\n"
+            );
+        }
+        if self.rows.is_empty() {
+            out.push_str("No observations were available at the declared cutoff.\n\n");
+        } else if let Some(alarm) = &self.claim.value.first_alarm {
             let _ = writeln!(
                 out,
                 "First alarm: observation {} at sequence {}, declared availability {} ns.\n",

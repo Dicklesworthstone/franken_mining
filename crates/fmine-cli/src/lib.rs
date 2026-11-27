@@ -260,6 +260,7 @@ pub enum CliCommand {
     /// Assess an explicitly declared mining-front sequence under a source-bound spatial model.
     ForecastSpatial {
         input: PathBuf,
+        as_of_ns: Option<i64>,
     },
     /// Score a time-proved frozen record against original outcomes and its registered baselines (BD-076).
     ForecastRecord(forecast_record::Command),
@@ -1283,20 +1284,7 @@ pub fn parse_args(
             }
             "metrics waterfall" => CliCommand::MetricsWaterfall(waterfall::parse(&words)?),
             "metrics roce" => CliCommand::CapitalReturn(capital_return::parse(&words)?),
-            "forecast spatial-monitor" => match &words[..] {
-                [group, verb, flag, path]
-                    if group == "forecast"
-                        && verb == "spatial-monitor"
-                        && flag == "--input"
-                        && !path.trim().is_empty()
-                        && !path.starts_with("--") =>
-                {
-                    CliCommand::ForecastSpatial {
-                        input: PathBuf::from(path),
-                    }
-                }
-                _ => return Err(spatial::USAGE.to_owned()),
-            },
+            "forecast spatial-monitor" => spatial::parse(&words)?,
             "decide production" => {
                 CliCommand::DecideProduction(decision::production::parse(&words)?)
             }
@@ -2426,7 +2414,9 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             envelope
         }
         CliCommand::ForecastJournal(command) => forecast_journal::execute(command, workspace_root),
-        CliCommand::ForecastSpatial { input } => spatial::execute(input, workspace_root),
+        CliCommand::ForecastSpatial { input, as_of_ns } => {
+            spatial::execute(input, *as_of_ns, workspace_root)
+        }
         CliCommand::ForecastRecord(command) => forecast_record::execute(command, workspace_root),
         CliCommand::ForecastCandidate(command) => {
             forecast_candidate::execute(command, workspace_root)

@@ -914,3 +914,10 @@ source and semantic changes, inherited evidence, chronology and dimensional mism
 population limits, sticky crossings through a separately evaluated prefix, deterministic JSON/Markdown,
 and complete Markdown inputs, diagnostics and source/Claim bindings.
 These are synthetic controls; no authentic-site or false-alarm qualification is asserted by this adapter.
+
+DESIGN (bd-5tjn): `spatial::evaluate_as_of` checks that the policy was declared by the inclusive cutoff
+and evaluates observations with declared availability at or before it. The entire worksheet must parse
+and row availability must strictly increase. Only admitted rows undergo observation-level validation
+and enter diagnostic Claims. An empty prefix retains the policy and reports zero observations. A
+version-2 SPAR frame commits the cutoff. The source anchor still identifies the complete worksheet, so
+changing later bytes changes the receipt identity while leaving admitted diagnostics the same.

@@ -342,6 +342,12 @@ The example is synthetic. The command checks supplied records; it supplies no in
 calibrated-model claim, automatic retraining or completed human investigation. Use `--json` for the
 source-bound Claim receipt and full ordered evidence.
 
+To replay the front at a review time, add `--as-of-ns` with a nonnegative UTC Unix nanosecond cutoff.
+For example, `--as-of-ns 50` in the synthetic worksheet includes polygons 1 and 2. The report shows
+only observations and alarms visible by the declared cutoff, including observations at the exact
+boundary. The receipt retains the full worksheet hash and records the cutoff. This is a replay of
+declared times.
+
 ## Assess capital return on an explicit accounting basis
 
 **DESIGN.** Calculate an earnings-to-capital return with its definition, dates and source evidence retained:

@@ -359,6 +359,66 @@ fn finite_overflow_empty_and_oversized_populations_never_emit_partial_success() 
 }
 
 #[test]
+fn availability_cutoff_binds_an_inclusive_prefix_and_ignores_future_values() {
+    let input = fixture().replace("available_ns = 31", "available_ns = 41");
+    let full = run(&input).expect("full worksheet");
+    let assess = |text: &str, cutoff| evaluate_as_of(text, anchor(text), cutoff);
+    let prior = assess(&input, 30).expect("first observation exactly at cutoff");
+    assert_eq!(prior.rows().len(), 1);
+    assert_eq!(prior.inputs().len(), 2);
+    assert_eq!(prior.rows()[0].value, full.rows()[0].value);
+    assert_ne!(
+        prior.digest(),
+        assess(&input, 35)
+            .expect("same population, later cutoff")
+            .digest()
+    );
+    assert_eq!(
+        prior.to_json(),
+        assess(&input, 30)
+            .expect("same worksheet and cutoff")
+            .to_json()
+    );
+    assert_eq!(
+        assess(&input, 41)
+            .expect("second observation at cutoff")
+            .rows()
+            .len(),
+        2
+    );
+
+    let changed = input.replace(
+        "observed_value = \"5\"",
+        "observed_value = \"future-value\"",
+    );
+    let isolated = assess(&changed, 30).expect("future value outside the cutoff");
+    assert_eq!(prior.rows()[0].value, isolated.rows()[0].value);
+    assert_eq!(prior.claim().value, isolated.claim().value);
+    assert_ne!(prior.digest(), isolated.digest());
+    for format in [isolated.to_json(), isolated.to_markdown()] {
+        assert!(!format.contains("future-value"));
+        assert!(!format.contains("polygon-1"));
+    }
+    assert!(assess(&changed, 41).is_err());
+    assert!(evaluate_as_of(&changed, anchor(&input), 30).is_err());
+
+    let empty = assess(&input, 10).expect("policy available, no outcomes yet");
+    assert_eq!(empty.claim().value.observations, 0);
+    assert!(empty.claim().value.first_alarm.is_none());
+    assert_eq!(empty.claim().parents, vec![empty.inputs()[0].claim_id]);
+    assert!(
+        empty
+            .to_markdown()
+            .contains("No observations were available")
+    );
+    assert_eq!(assess(&input, 9).unwrap_err().code, "FMINE-REF-206");
+    let reordered = format!("{input}{}", sample(2, 60.0, 5.0));
+    assert_eq!(assess(&reordered, 30).unwrap_err().code, "FMINE-REF-206");
+    let no_time = input.replace("available_ns = 41", "available_ns = \"unknown\"");
+    assert!(assess(&no_time, 30).is_err());
+}
+
+#[test]
 fn first_alarm_survives_later_observations_and_matches_existing_monitor() {
     let mut text = POLICY.to_owned();
     for index in 0..80 {
@@ -403,6 +463,14 @@ fn first_alarm_survives_later_observations_and_matches_existing_monitor() {
         prefix_receipt.claim().value.first_alarm.as_ref(),
         Some(first)
     );
+    let before = evaluate_as_of(&text, anchor(&text), first.available_ns - 1)
+        .expect("before threshold crossing");
+    assert_eq!(before.rows().len(), first.sequence - 1);
+    assert!(before.claim().value.first_alarm.is_none());
+    let at = evaluate_as_of(&text, anchor(&text), first.available_ns)
+        .expect("threshold crossing exactly at cutoff");
+    assert_eq!(at.rows().len(), first.sequence);
+    assert_eq!(at.claim().value.first_alarm.as_ref(), Some(first));
 }
 
 #[test]
