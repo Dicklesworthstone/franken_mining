@@ -7,7 +7,7 @@ The public-filings assurance, five-state identity ledger, keyed public Claim ind
 - **Layer:** V
 - **Subsystem:** Portal
 - **LOC budget:** 24,000 planned / 28,000 ceiling
-- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key", "consistency", "transcribe", "forecast", "guidance", "waterfall", "recovery", "lint", "html", "mirror"]`
+- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key", "consistency", "transcribe", "forecast", "guidance", "waterfall", "recovery", "lint", "html", "mirror", "markdown_lines"]`
 
 ## 2. Inputs
 ### Mathematical & Domain Formulation
