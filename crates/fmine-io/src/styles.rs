@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 
 use crate::IoError;
-use crate::xlsx::{decode_xml_entities, extract_attr_exact, iter_xml_start_tags};
+use crate::xlsx::{extract_attr_exact, iter_xml_start_tags, parser_view};
 
 /// The built-in formats ECMA-376 Part 1 §18.8.30 defines, by `numFmtId`. Ids 5–8, 23–36 and 41–44 are
 /// locale-dependent and not defined there; a workbook that uses them must list them in `numFmts`.
@@ -114,13 +114,15 @@ impl Styles {
     }
 }
 
-/// The body of the first `<name ...>...</name>` element, or `None` if it is absent or self-closing.
+/// The body of the first `<name ...>...</name>` element, or `None` if it is absent or self-closing. The body starts
+/// where the scan found the tag, not at the first equal text.
 fn section<'a>(xml: &'a str, name: &str) -> Option<&'a str> {
     let open = iter_xml_start_tags(xml, name).into_iter().next()?;
     if open.ends_with("/>") {
         return None;
     }
-    let start = xml.find(open)? + open.len();
+    // `open` is a slice of `xml`, so its address difference is its byte offset.
+    let start = (open.as_ptr() as usize).checked_sub(xml.as_ptr() as usize)? + open.len();
     let end = xml[start..].find(&format!("</{name}>"))? + start;
     Some(&xml[start..end])
 }
@@ -137,8 +139,10 @@ fn id_attr(tag: &str, name: &str) -> Result<Option<u32>, IoError> {
 
 /// Parses a styles part: every `<numFmt>` of `<numFmts>` and the `numFmtId` of every `<xf>` of `<cellXfs>`, in
 /// order. `<cellStyleXfs>` is not read. A `numFmt` without a valid id or a code, or an `xf` whose `numFmtId`
-/// is not an unsigned integer, is an error.
+/// is not an unsigned integer, is an error, as is markup the scanner does not read (`xlsx::parser_view`).
 pub fn parse_styles(xml: &str) -> Result<Styles, IoError> {
+    let xml = parser_view("styles part", xml)?;
+    let xml = xml.as_ref();
     let mut styles = Styles::default();
     if let Some(body) = section(xml, "numFmts") {
         for tag in iter_xml_start_tags(body, "numFmt") {
@@ -146,7 +150,7 @@ pub fn parse_styles(xml: &str) -> Result<Styles, IoError> {
                 .ok_or_else(|| IoError::Xml("styles: numFmt without numFmtId".to_string()))?;
             let code = extract_attr_exact(tag, "formatCode")
                 .ok_or_else(|| IoError::Xml(format!("styles: numFmt {id} without formatCode")))?;
-            styles.num_fmts.insert(id, decode_xml_entities(&code));
+            styles.num_fmts.insert(id, code);
         }
     }
     if let Some(body) = section(xml, "cellXfs") {

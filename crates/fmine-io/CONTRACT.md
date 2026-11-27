@@ -20,6 +20,19 @@ per resolved ZIP part, across both visible and hidden sheets. Duplicate relation
 missing sheet names and external sheet targets refuse extraction. A workbook with no relationship part may use
 the legacy positional sheet ordering. A present relationship part must resolve every declared sheet.
 
+DESIGN (`T1`): the reader scans XML text, so each part it opens is first put in the form an XML parser delivers
+(`xlsx::parser_view`). Comments and processing instructions are removed and line ends read as LF. A CDATA
+section, a document type or other declaration, a comment containing `--`, a `<` inside an attribute value, a bare
+`&` or a reference it cannot decode refuses the part, named. A sheet's relationship ID is its `id` in the
+relationships namespace (transitional or strict) under whatever prefix the `<workbook>` element binds, or the
+literal `r:id` when none is bound. A namespace declaration on `<sheets>` or `<sheet>`, or two bound IDs on one
+sheet, refuses. A present `_rels/.rels` must name exactly one officeDocument, at `xl/workbook.xml`. A legacy
+`xl/`-prefixed target keeps its legacy reading only while its standard resolution names no part, and refuses when
+both parts exist. Of the 462 parts this reader opens in the 42 local corpus workbooks, none holds refused markup;
+their references are `&amp;` and `&quot;` only; every root names `xl/workbook.xml`; and no relationship target is
+legacy or absolute. Reading line ends as LF changes the text of the 92 shared strings that hold a literal
+CR LF; no registered extraction moves (the ignored `fmine-public` and `xtask` real-file tests pass).
+
 `Workbook::cell_census` counts cells by kind over visible sheets and computes the numeric-cell digest: SHA-256 over
 `"{sheet}\t{cell_ref}\t{value}\n"` for every numeric cell, sheets in workbook order, cells in `(row, col)` order,
 values in `f64` `Display` form. The format is fixed so an independently written reader can reproduce it
@@ -384,8 +397,9 @@ for current reuse; an unpinned replay establishes only internal consistency of t
 - No cell is dropped or re-typed silently. The worksheet scanner reads every `<c>` start tag, line-wrapped or with
   single-quoted attributes included. A reference given twice in one worksheet refuses, even when one copy is empty.
   So does a tag with no usable `r`, located by sheet and cell ordinal. A boolean (`t="b"`) refuses because
-  `CellValue` has no boolean variant: its stored `1` would otherwise read as the number 1. None of these occurs in
-  the 42 local corpus workbooks (422,875 cell tags), so no registered extraction moves.
+  `CellValue` has no boolean variant: its stored `1` would otherwise read as the number 1. So does a stored
+  number that is not finite (`1e999`, `NaN`, `inf`), with its locator. None of these occurs in the 42 local corpus
+  workbooks (422,875 cell tags), so no registered extraction moves.
 - Hostile archives (BD-073). `read_zip_entries` refuses, before allocating, an entry declaring more than
   `MAX_ENTRY_BYTES` (64 MiB) uncompressed or an archive declaring more than `MAX_ARCHIVE_BYTES` (256 MiB):
   `ZipError::Limit`. Inflation stops at the declared size, and an entry that inflates to any other length is refused,
@@ -447,8 +461,10 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   (`109` for a depth above 6). It refuses (`109`) a design whose bounding box leaves `[0, size · count]` on any
   axis of the block model's frame. In a turned frame, rounding may refuse a design that only touches the model's
   side. `against` and `total` refuse (`207`) a shell or weights that are not one per block.
-- XML text decodes the five named entities and `&#10;`, `&#13;`, `&#160;`, each once (`&amp;` last); no DTD or
-  entity declaration is read, so nothing expands.
+- XML text and attribute values decode once, where they are read, as an XML parser delivers them: the five
+  predefined entities and every decimal or hexadecimal character reference to an XML 1.0 character (`&#160;` is
+  U+00A0, and `<v>&#52;2</v>` is the number 42). In an attribute value a literal tab or line break is a space. No
+  DTD or entity declaration is read, so nothing expands; a part holding one refuses (`T1` above).
 - `numtok` keeps malformed grouping, unsupported attached notation, decimal overflow and ambiguous standalone
   dash signs as `UnsupportedNumber`, allowing the consumer to remain unchecked. It never rounds an overflowing
   input into range. Trailing zeros retain the finest printed step; hedge words are qualifiers and do not invent

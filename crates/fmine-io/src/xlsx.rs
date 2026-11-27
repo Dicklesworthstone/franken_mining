@@ -1,5 +1,6 @@
 //! Label-anchored `.xlsx` workbook and worksheet extractor (`BD-057`, `BD-271`, `G-BULL-1`, `G-BULL-2`).
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
@@ -304,14 +305,23 @@ impl Workbook {
         let digest = sha256(bytes).0;
         let entries = read_zip_entries(bytes).map_err(|e| IoError::Zip(e.to_string()))?;
 
+        if let Some(root) = entries.get("_rels/.rels") {
+            let root = String::from_utf8_lossy(root);
+            check_office_document(&parser_view("_rels/.rels", &root)?)?;
+        }
         let wb_xml = entries
             .get("xl/workbook.xml")
             .ok_or_else(|| IoError::Xml("missing xl/workbook.xml".to_string()))?;
-        let wb_text = String::from_utf8_lossy(wb_xml);
+        let wb_raw = String::from_utf8_lossy(wb_xml);
+        let wb_text = parser_view("xl/workbook.xml", &wb_raw)?;
 
-        let rels_text = entries
+        let rels_raw = entries
             .get("xl/_rels/workbook.xml.rels")
             .map(|b| String::from_utf8_lossy(b));
+        let rels_text = rels_raw
+            .as_deref()
+            .map(|rels| parser_view("xl/_rels/workbook.xml.rels", rels))
+            .transpose()?;
         let relationships = parse_workbook_rels(rels_text.as_deref().unwrap_or_default())?;
         let shared_strings = workbook_metadata(
             &entries,
@@ -319,9 +329,12 @@ impl Workbook {
             "sharedStrings",
             "xl/sharedStrings.xml",
         )?
-        .map_or_else(Vec::new, |bytes| {
-            parse_shared_strings(&String::from_utf8_lossy(bytes))
-        });
+        .map(|bytes| {
+            let text = String::from_utf8_lossy(bytes);
+            parser_view("shared strings part", &text).map(|text| parse_shared_strings(&text))
+        })
+        .transpose()?
+        .unwrap_or_default();
         let styles = workbook_metadata(&entries, &relationships, "styles", "xl/styles.xml")?
             .map(|b| parse_styles(&String::from_utf8_lossy(b)))
             .transpose()?;
@@ -345,7 +358,9 @@ impl Workbook {
                         "sheet {sheet_name:?}: unresolved workbook relationship {rel_id:?}"
                     ))
                 })?;
-                internal_workbook_part(relationship, &format!("sheet {sheet_name:?}"))?
+                internal_workbook_part(relationship, &format!("sheet {sheet_name:?}"), &|part| {
+                    entries.contains_key(part)
+                })?
             };
             if let Some(prior) = parts.insert(part.clone(), sheet_name.clone()) {
                 return Err(IoError::Xml(format!(
@@ -359,9 +374,11 @@ impl Workbook {
             })?;
             let hidden = state == "hidden" || state == "veryHidden";
             let mut hidden_items = Vec::new();
+            let raw = String::from_utf8_lossy(bytes);
+            let text = parser_view(&part, &raw)?;
             let cells_by_coord = parse_worksheet_cells(
                 &sheet_name,
-                &String::from_utf8_lossy(bytes),
+                &text,
                 &shared_strings,
                 styles.as_ref(),
                 if hidden {
@@ -419,13 +436,30 @@ impl Workbook {
     }
 }
 
-/// Resolve the target against xl/workbook.xml. A leading slash names a package part
-/// directly. Keep accepting the legacy xl-prefixed spelling used by older inputs.
-fn workbook_part(target: &str) -> Option<String> {
-    let mut parts = Vec::new();
-    if !target.starts_with('/') && !target.starts_with("xl/") {
-        parts.push("xl");
+/// Resolve the target against xl/workbook.xml; a leading slash names a package part directly. Older inputs spell
+/// a target with an `xl/` prefix (`xl/worksheets/sheet1.xml`), which is kept while the standard resolution
+/// (`xl/xl/worksheets/sheet1.xml`) names no part. When it names one, a spreadsheet program reads that part, and so
+/// does this reader; if the legacy part exists too, the target is ambiguous and refuses.
+fn workbook_part(target: &str, exists: &dyn Fn(&str) -> bool) -> Result<String, String> {
+    let invalid = || "is invalid".to_string();
+    let standard =
+        resolve_part((!target.starts_with('/')).then_some("xl"), target).ok_or_else(invalid)?;
+    if target.starts_with("xl/") {
+        let legacy = resolve_part(None, target).ok_or_else(invalid)?;
+        if !exists(&standard) {
+            return Ok(legacy);
+        }
+        if legacy != standard && exists(&legacy) {
+            return Err(format!(
+                "names {standard:?} as a spreadsheet program resolves it and {legacy:?} by the legacy xl/ spelling"
+            ));
+        }
     }
+    Ok(standard)
+}
+
+fn resolve_part(base: Option<&str>, target: &str) -> Option<String> {
+    let mut parts: Vec<&str> = base.into_iter().collect();
     for component in target.split('/') {
         match component {
             "" | "." => {}
@@ -438,16 +472,47 @@ fn workbook_part(target: &str) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("/"))
 }
 
-pub(crate) fn metadata_part_name(rels_xml: &str, kind: &str) -> Result<Option<String>, IoError> {
-    workbook_metadata_part(&parse_workbook_rels(rels_xml)?, kind)
+/// The package's root relationships must name exactly one office document, at `xl/workbook.xml`: the only
+/// location this reader reads, while a spreadsheet program opens whichever part they name.
+fn check_office_document(rels_xml: &str) -> Result<(), IoError> {
+    let relationships = parse_workbook_rels(rels_xml)?;
+    let mut documents = relationships.values().filter(|attrs| {
+        attrs
+            .get("Type")
+            .is_some_and(|kind| kind.ends_with("/officeDocument"))
+    });
+    let (Some(document), None) = (documents.next(), documents.next()) else {
+        return Err(IoError::Xml(
+            "_rels/.rels does not name exactly one officeDocument part".to_string(),
+        ));
+    };
+    let target = document.get("Target").map_or("", String::as_str);
+    let components: Vec<&str> = target
+        .split('/')
+        .filter(|c| !c.is_empty() && *c != ".")
+        .collect();
+    if components != ["xl", "workbook.xml"] {
+        return Err(IoError::Xml(format!(
+            "_rels/.rels names the workbook part {target:?}; only xl/workbook.xml is read"
+        )));
+    }
+    Ok(())
 }
 
-type WorkbookAttributes<'a> = BTreeMap<&'a str, &'a str>;
+/// Without the archive's part list, a legacy `xl/` target resolves the legacy way.
+pub(crate) fn metadata_part_name(rels_xml: &str, kind: &str) -> Result<Option<String>, IoError> {
+    let rels = parser_view("workbook relationships", rels_xml)?;
+    workbook_metadata_part(&parse_workbook_rels(&rels)?, kind, &|_| false)
+}
+
+/// Attribute name to decoded value.
+type WorkbookAttributes<'a> = BTreeMap<&'a str, String>;
 type WorkbookRelationships<'a> = BTreeMap<String, WorkbookAttributes<'a>>;
 
 fn workbook_metadata_part(
     relationships: &WorkbookRelationships<'_>,
     kind: &str,
+    exists: &dyn Fn(&str) -> bool,
 ) -> Result<Option<String>, IoError> {
     let suffix = format!("/{kind}");
     let mut links = relationships.values().filter(|attrs| {
@@ -463,14 +528,15 @@ fn workbook_metadata_part(
             "workbook specifies multiple {kind} parts"
         )));
     }
-    internal_workbook_part(relationship, &format!("workbook {kind}")).map(Some)
+    internal_workbook_part(relationship, &format!("workbook {kind}"), exists).map(Some)
 }
 
 fn internal_workbook_part(
     attrs: &WorkbookAttributes<'_>,
     context: &str,
+    exists: &dyn Fn(&str) -> bool,
 ) -> Result<String, IoError> {
-    match attrs.get("TargetMode").copied() {
+    match attrs.get("TargetMode").map(String::as_str) {
         None | Some("Internal") => {}
         Some("External") => return Err(IoError::Xml(format!("external {context} part"))),
         Some(mode) => {
@@ -483,8 +549,8 @@ fn internal_workbook_part(
         .get("Target")
         .filter(|target| !target.is_empty())
         .ok_or_else(|| IoError::Xml(format!("{context} relationship has no target")))?;
-    workbook_part(&decode_xml_entities(target))
-        .ok_or_else(|| IoError::Xml(format!("invalid {context} target {target:?}")))
+    workbook_part(target, exists)
+        .map_err(|detail| IoError::Xml(format!("{context} target {target:?} {detail}")))
 }
 
 fn workbook_metadata<'a>(
@@ -493,7 +559,9 @@ fn workbook_metadata<'a>(
     kind: &str,
     legacy_path: &str,
 ) -> Result<Option<&'a [u8]>, IoError> {
-    let Some(part) = workbook_metadata_part(relationships, kind)? else {
+    let Some(part) =
+        workbook_metadata_part(relationships, kind, &|part| entries.contains_key(part))?
+    else {
         return Ok(entries.get(legacy_path).map(Vec::as_slice));
     };
     let bytes = entries
@@ -513,8 +581,8 @@ fn parse_workbook_rels(xml: &str) -> Result<WorkbookRelationships<'_>, IoError> 
         let id = attrs
             .get("Id")
             .filter(|id| !id.is_empty())
+            .cloned()
             .ok_or_else(|| IoError::Xml(format!("{context} has no ID")))?;
-        let id = decode_xml_entities(id);
         if map.insert(id.clone(), attrs).is_some() {
             return Err(IoError::Xml(format!(
                 "duplicate workbook relationship ID {id:?}"
@@ -530,7 +598,41 @@ struct SheetDeclaration {
     state: String,
 }
 
+/// The relationships namespace, transitional and strict. A sheet's relationship ID is its `id` attribute in this
+/// namespace, whatever prefix the workbook binds to it.
+const RELATIONSHIP_NAMESPACES: [&str; 2] = [
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+    "http://purl.oclc.org/ooxml/officeDocument/relationships",
+];
+
 fn parse_workbook_sheets(xml: &str) -> Result<Vec<SheetDeclaration>, IoError> {
+    // The attribute names that carry a relationship ID: `{prefix}:id` for every prefix the workbook element binds
+    // to the relationships namespace. `r:id` with `r` bound elsewhere is not one. A workbook binding no prefix
+    // (minimal fixtures) keeps the literal `r:id`. A declaration on `<sheets>` or `<sheet>` could rebind a prefix
+    // there, which this scanner does not track, so it refuses.
+    let mut id_names = Vec::new();
+    if let Some(root) = iter_xml_start_tags(xml, "workbook").into_iter().next() {
+        for (key, value) in workbook_attributes(root, "workbook element")? {
+            if let Some(prefix) = key.strip_prefix("xmlns:")
+                && RELATIONSHIP_NAMESPACES.contains(&value.as_str())
+            {
+                id_names.push(format!("{prefix}:id"));
+            }
+        }
+    }
+    if id_names.is_empty() {
+        id_names.push("r:id".to_string());
+    }
+    for tag in iter_xml_start_tags(xml, "sheets") {
+        if workbook_attributes(tag, "sheets element")?
+            .keys()
+            .any(|key| key.starts_with("xmlns"))
+        {
+            return Err(IoError::Xml(
+                "the sheets element declares a namespace".to_string(),
+            ));
+        }
+    }
     let mut out = Vec::new();
     let mut names = BTreeSet::new();
     for (position, tag) in iter_xml_start_tags(xml, "sheet").into_iter().enumerate() {
@@ -539,26 +641,38 @@ fn parse_workbook_sheets(xml: &str) -> Result<Vec<SheetDeclaration>, IoError> {
         let name = attrs
             .get("name")
             .filter(|name| !name.is_empty())
+            .cloned()
             .ok_or_else(|| IoError::Xml(format!("{context} has no name")))?;
-        let name = decode_xml_entities(name);
         if !names.insert(name.to_ascii_lowercase()) {
             return Err(IoError::Xml(format!("duplicate worksheet name {name:?}")));
         }
-        if attrs.contains_key("r:id") && attrs.contains_key("id") {
+        if attrs.keys().any(|key| key.starts_with("xmlns")) {
+            return Err(IoError::Xml(format!("sheet {name:?} declares a namespace")));
+        }
+        let mut bound = id_names.iter().filter_map(|id| attrs.get(id.as_str()));
+        let rel_id = bound.next();
+        if bound.next().is_some() {
+            return Err(IoError::Xml(format!(
+                "sheet {name:?} has more than one relationship ID"
+            )));
+        }
+        if rel_id.is_some() && attrs.contains_key("id") {
             return Err(IoError::Xml(format!(
                 "sheet {name:?} has both r:id and id relationship bindings"
             )));
         }
-        let rel_id = attrs
-            .get("r:id")
+        let rel_id = rel_id
             .or_else(|| attrs.get("id"))
-            .copied()
+            .cloned()
             .unwrap_or_default();
-        let state = attrs.get("state").copied().unwrap_or("visible");
+        let state = attrs
+            .get("state")
+            .cloned()
+            .unwrap_or_else(|| "visible".to_string());
         out.push(SheetDeclaration {
             name,
-            rel_id: decode_xml_entities(rel_id),
-            state: state.to_string(),
+            rel_id,
+            state,
         });
     }
     Ok(out)
@@ -669,15 +783,18 @@ fn parse_worksheet_cells(
             .transpose()?;
         let format = styles.map_or(NumberFormat::Builtin(0), |st| st.format_of(style));
         let formula = extract_element_text(c_body, "f").map(|s| decode_xml_entities(&s));
-        let raw_v = extract_element_text(c_body, "v")
-            .or_else(|| extract_element_text(c_body, "t"))
-            .unwrap_or_default();
+        // Decoded once, as a parser delivers it: `<v>&#52;2</v>` is the number 42.
+        let raw_v = decode_xml_entities(
+            &extract_element_text(c_body, "v")
+                .or_else(|| extract_element_text(c_body, "t"))
+                .unwrap_or_default(),
+        );
 
         let mut number_text = None;
         let value = match cell_type.as_str() {
             "s" => {
                 let s = raw_v
-                    .trim()
+                    .trim_matches(is_xml_space)
                     .parse::<usize>()
                     .ok()
                     .and_then(|i| shared_strings.get(i))
@@ -688,10 +805,7 @@ fn parse_worksheet_cells(
                     })?;
                 classify_string_cell(sheet_name, &cell_ref, s.clone(), quarantined)
             }
-            "str" | "inlineStr" => {
-                let s = decode_xml_entities(&raw_v);
-                classify_string_cell(sheet_name, &cell_ref, s, quarantined)
-            }
+            "str" | "inlineStr" => classify_string_cell(sheet_name, &cell_ref, raw_v, quarantined),
             // The stored 1 or 0 of a boolean is not a number, and CellValue has no boolean variant.
             "b" => {
                 return Err(IoError::Xml(format!(
@@ -699,33 +813,28 @@ fn parse_worksheet_cells(
                 )));
             }
             "e" => {
-                let tok = decode_xml_entities(&raw_v);
                 quarantined.push(QuarantineItem::FormulaErrorCell {
                     sheet_name: sheet_name.to_string(),
                     cell_ref: cell_ref.clone(),
-                    error_token: tok.clone(),
+                    error_token: raw_v.clone(),
                 });
-                CellValue::FormulaError(tok)
+                CellValue::FormulaError(raw_v)
             }
             _ => {
-                let trimmed = raw_v.trim();
+                let trimmed = raw_v.trim_matches(is_xml_space);
                 if trimmed.is_empty() {
                     continue;
                 }
                 if let Ok(num) = trimmed.parse::<f64>() {
-                    if num.is_finite() {
-                        number_text = Some(trimmed.to_string());
-                        CellValue::Number(num)
-                    } else {
-                        continue;
+                    if !num.is_finite() {
+                        return Err(IoError::Xml(format!(
+                            "{sheet_name}!{cell_ref}: number {trimmed:?} is not finite"
+                        )));
                     }
+                    number_text = Some(trimmed.to_string());
+                    CellValue::Number(num)
                 } else {
-                    classify_string_cell(
-                        sheet_name,
-                        &cell_ref,
-                        decode_xml_entities(trimmed),
-                        quarantined,
-                    )
+                    classify_string_cell(sheet_name, &cell_ref, trimmed.to_string(), quarantined)
                 }
             }
         };
@@ -761,6 +870,11 @@ fn find_cell_tag(xml: &str) -> Option<usize> {
         }
     }
     None
+}
+
+/// XML whitespace (`S`): what a numeric value's surrounding whitespace may be. A no-break space is not.
+const fn is_xml_space(ch: char) -> bool {
+    matches!(ch, ' ' | '\t' | '\r' | '\n')
 }
 
 fn classify_string_cell(
@@ -1022,12 +1136,12 @@ pub(crate) fn iter_xml_start_tags<'a>(xml: &'a str, tag_name: &'a str) -> Vec<&'
 
 /// The value of attribute `name` in a start tag, matched as a whole name: preceded by whitespace and followed
 /// by `=` (whitespace allowed around it), with either quote style. `cs="9"` does not match `s`. The value is
-/// returned undecoded.
+/// returned decoded, so `t="&#115;"` is the shared-string type `s`, as an XML parser reads it.
 pub(crate) fn extract_attr_exact(tag: &str, name: &str) -> Option<String> {
     let mut attrs = xml_attribute_text(tag);
     while let Some((key, body, tail)) = next_xml_attribute(attrs) {
         if key == name {
-            return Some(body.to_string());
+            return Some(decode_attribute(body));
         }
         attrs = tail.trim_start();
     }
@@ -1040,7 +1154,7 @@ fn workbook_attributes<'a>(tag: &'a str, context: &str) -> Result<WorkbookAttrib
     while !attrs.is_empty() {
         let (key, value, tail) = next_xml_attribute(attrs)
             .ok_or_else(|| IoError::Xml(format!("{context} has malformed attributes")))?;
-        if values.insert(key, value).is_some() {
+        if values.insert(key, decode_attribute(value)).is_some() {
             return Err(IoError::Xml(format!(
                 "{context} has duplicate attribute {key:?}"
             )));
@@ -1098,17 +1212,163 @@ fn extract_element_text(xml: &str, tag_name: &str) -> Option<String> {
     Some(xml[gt + 1..end].to_string())
 }
 
+/// An attribute value as an XML parser delivers it: a literal tab or line break reads as a space, and then
+/// references decode, so `&#10;` is still a line break.
+fn decode_attribute(body: &str) -> String {
+    if body.contains(['\t', '\n', '\r']) {
+        decode_xml_entities(&body.replace(['\t', '\n', '\r'], " "))
+    } else {
+        decode_xml_entities(body)
+    }
+}
+
+/// Decodes, in one pass, the five predefined entities and every character reference (`&#52;`, `&#x34;`) to a
+/// valid XML character, as an XML parser does. The text `&amp;lt;` stays `&lt;`: nothing is decoded twice. A
+/// reference that is neither stays as written; [`parser_view`] refuses such a part before it is read.
 pub(crate) fn decode_xml_entities(s: &str) -> String {
     if !s.contains('&') {
         return s.to_string();
     }
-    // `&amp;` goes last, so the text `&lt;` (written `&amp;lt;`) stays `&lt;` and is not decoded twice.
-    s.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&#10;", "\n")
-        .replace("&#13;", "\r")
-        .replace("&#160;", " ")
-        .replace("&amp;", "&")
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        match after
+            .find(';')
+            .and_then(|end| Some((reference_char(&after[..end])?, end)))
+        {
+            Some((ch, end)) => {
+                out.push(ch);
+                rest = &after[end + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The character a reference's name (between `&` and `;`) stands for: one of the five predefined entities, or a
+/// decimal (`#52`) or lowercase-x hexadecimal (`#x34`) character reference to an XML 1.0 `Char`.
+fn reference_char(name: &str) -> Option<char> {
+    let code = match name {
+        "lt" => return Some('<'),
+        "gt" => return Some('>'),
+        "amp" => return Some('&'),
+        "quot" => return Some('"'),
+        "apos" => return Some('\''),
+        _ => {
+            if let Some(hex) = name.strip_prefix("#x") {
+                hex.bytes()
+                    .all(|b| b.is_ascii_hexdigit())
+                    .then(|| u32::from_str_radix(hex, 16).ok())??
+            } else {
+                let digits = name.strip_prefix('#')?;
+                digits
+                    .bytes()
+                    .all(|b| b.is_ascii_digit())
+                    .then(|| digits.parse::<u32>().ok())??
+            }
+        }
+    };
+    matches!(code, 0x9 | 0xA | 0xD | 0x20..=0xD7FF | 0xE000..=0xFFFD | 0x10000..=0x10_FFFF)
+        .then(|| char::from_u32(code))?
+}
+
+/// The text of a part as an XML parser sees its markup (`T1`). Comments and processing instructions, the XML
+/// declaration included, are removed, so a commented-out `<c r="B1"><v>999</v></c>` is not read as a cell, and a
+/// commented-out `<si>` does not shift every shared-string index. Line ends read as LF. Refused, because a parser
+/// would expand them, reject them, or read them differently from this scanner: a CDATA section, a document type or
+/// other `<!` declaration, a comment containing `--`, an unterminated comment, processing instruction or tag, a
+/// `<` inside an attribute value, a bare `&`, and a reference [`decode_xml_entities`] does not decode. Of the 462
+/// parts this reader opens in the 42 local corpus workbooks, none holds any of these beyond a leading XML
+/// declaration.
+pub(crate) fn parser_view<'a>(part: &str, xml: &'a str) -> Result<Cow<'a, str>, IoError> {
+    let refuse = |what: &str| IoError::Xml(format!("{part}: {what} is not read"));
+    let xml = xml.strip_prefix('\u{feff}').unwrap_or(xml);
+    let body = match xml.strip_prefix("<?xml") {
+        Some(decl) if decl.starts_with(|c: char| c.is_ascii_whitespace() || c == '?') => decl
+            .split_once("?>")
+            .map(|(_, rest)| rest)
+            .ok_or_else(|| refuse("an unterminated XML declaration"))?,
+        _ => xml,
+    };
+    let text = if body.contains("<!") || body.contains("<?") {
+        let mut out = String::with_capacity(body.len());
+        let mut rest = body;
+        while let Some(at) = rest.find('<') {
+            out.push_str(&rest[..at]);
+            let tail = &rest[at..];
+            if let Some(after) = tail.strip_prefix("<!--") {
+                let (comment, after) = after
+                    .split_once("-->")
+                    .ok_or_else(|| refuse("an unterminated comment"))?;
+                if comment.contains("--") {
+                    return Err(refuse("a comment containing \"--\""));
+                }
+                rest = after;
+            } else if let Some(after) = tail.strip_prefix("<?") {
+                rest = after
+                    .split_once("?>")
+                    .map(|(_, after)| after)
+                    .ok_or_else(|| refuse("an unterminated processing instruction"))?;
+            } else if tail.starts_with("<![CDATA[") {
+                return Err(refuse("a CDATA section"));
+            } else if tail.starts_with("<!") {
+                return Err(refuse("a document type or other declaration"));
+            } else {
+                // A tag, copied through its closing `>`. A quoted value may hold `>`, but not `<`: that is
+                // malformed, and could hide a comment marker from this pass.
+                let mut quote = None;
+                let mut end = None;
+                for (i, ch) in tail.char_indices().skip(1) {
+                    match quote {
+                        Some(q) if ch == q => quote = None,
+                        Some(_) if ch == '<' => {
+                            return Err(refuse("a '<' inside an attribute value"));
+                        }
+                        Some(_) => {}
+                        None if matches!(ch, '"' | '\'') => quote = Some(ch),
+                        None if ch == '>' => {
+                            end = Some(i);
+                            break;
+                        }
+                        None if ch == '<' => break,
+                        None => {}
+                    }
+                }
+                let end = end.ok_or_else(|| refuse("an unterminated tag"))?;
+                out.push_str(&tail[..=end]);
+                rest = &tail[end + 1..];
+            }
+        }
+        out.push_str(rest);
+        Cow::Owned(out)
+    } else {
+        Cow::Borrowed(body)
+    };
+    // A parser reads CR LF, and a CR alone, as LF before anything else.
+    let text = if text.contains('\r') {
+        Cow::Owned(text.replace("\r\n", "\n").replace('\r', "\n"))
+    } else {
+        text
+    };
+    let mut rest = text.as_ref();
+    while let Some(at) = rest.find('&') {
+        let after = &rest[at + 1..];
+        match after.find(';').map(|end| &after[..end]) {
+            Some(name) if reference_char(name).is_some() => rest = &after[name.len() + 1..],
+            _ => {
+                let shown: String = after.chars().take(12).collect();
+                return Err(refuse(&format!(
+                    "the reference or bare ampersand at \"&{shown}\""
+                )));
+            }
+        }
+    }
+    Ok(text)
 }
