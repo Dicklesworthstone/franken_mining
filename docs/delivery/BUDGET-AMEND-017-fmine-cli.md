@@ -3,7 +3,7 @@
 - **Crate:** `fmine-cli`
 - **Planned / ceiling now:** 54000 / 62000
 - **Actual:** 54251 nonblank Rust lines at commit `ab09dfd`.
-- **New planned:** 64000
+- **New planned:** 64200
 - **New ceiling:** 66000
 - **New scope:** Capital approval freeze and pinned outcome scoring, drill-release arithmetic, developer NPV replay, and target screening across a directory of the same worksheets. These checks use bounded inputs with source hashes and JSON and Markdown output. Target screening accepts an explicit publication date for registered table documents. Public assurance also refuses salted internal review packets. Bare `fmine` prints a read-only triage from doctor's issuer-source and forecast checks (BD-114).
 - Includes the dated cash headroom screen for rehabilitation packages (bd-3a2a.1).
