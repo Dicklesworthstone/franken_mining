@@ -523,6 +523,10 @@ impl DrillStore {
     }
 
     fn init(conn: Connection) -> Result<Self, DrillStoreError> {
+        // A commit does not wait for the disk: the mark commits with the rows it covers, so a power loss that drops
+        // the last batches leaves a consistent store at an earlier mark, and catch-up applies them again.
+        conn.execute_batch("PRAGMA synchronous = NORMAL")
+            .map_err(sql("set synchronous"))?;
         conn.execute_batch(META_DDL)
             .map_err(sql("create projection_meta"))?;
         let found = optional(conn.query_row(

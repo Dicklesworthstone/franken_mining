@@ -859,6 +859,13 @@ fn test_a_store_on_disk_resumes_after_reopen() {
 
     let mut projection = Projection::open(DrillStore::open(&path).unwrap()).unwrap();
     assert_eq!(projection.mark(CELL).applied, 12);
+    // Commits do not wait for the disk (NORMAL is 1); fsqlite takes an unknown pragma silently, so read it back.
+    let synchronous = projection
+        .projector()
+        .conn
+        .query_row("PRAGMA synchronous", params![], |r| r.get::<_, i64>(0))
+        .unwrap();
+    assert_eq!(synchronous, 1);
     assert_holds(
         projection.projector(),
         &expected(&campaign.states[12]),
