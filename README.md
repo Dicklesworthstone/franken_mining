@@ -955,7 +955,8 @@ moisture, at measured moisture, and at the reference wet weight. The first diffe
 quantifies the moisture effect. The second quantifies the wet-weight effect at measured
 moisture. The result depends on the submitted reference and its declared independence.
 Use `plant transfer --input <worksheet.toml> --format markdown` for a table of the exact
-lot and total differences with the worksheet SHA-256 and the declared weight-reference lines.
+lot and total differences with the worksheet SHA-256, reporting scope and source lines for
+each lot's wet weight, moisture and declared weight reference.
 
 `plant flowsheet` fits all declared unit balances together, with each internal transfer shared by its two
 endpoints. Its worksheet explicitly supplies the graph, every stream and stocktake coordinate, every covariance

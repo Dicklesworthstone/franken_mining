@@ -170,11 +170,13 @@ fn test_transfer_separates_moisture_and_same_lot_wet_weight_effects() {
 
 #[test]
 fn test_transfer_markdown_shows_exact_lot_effects_and_reference_provenance() {
-    let declared = RAW.replacen(
-        "[[lot]]",
-        "planning_moisture = \"1/3\"\nreference_scale_independent = \"true\"\n\n[[lot]]",
-        1,
-    );
+    let declared = RAW
+        .replace("synthetic-lot-feed/v1", "synthetic|feed<[v1]>")
+        .replacen(
+            "[[lot]]",
+            "planning_moisture = \"1/3\"\nreference_scale_independent = \"true\"\n\n[[lot]]",
+            1,
+        );
     let reference =
         SCALE_REFERENCE.replace("synthetic-check-scale/lot-2", "synthetic|<scale>&[lot-2]");
     let input = format!("{declared}\n{reference}");
@@ -201,17 +203,21 @@ fn test_transfer_markdown_shows_exact_lot_effects_and_reference_provenance() {
         .unwrap();
     assert!(report.starts_with("# Dry-mass bridge\n"));
     assert!(report.contains(&format!("SHA-256 `{hash}`")));
+    assert!(report.contains("- Boundary — synthetic&#124;feed&#60;&#91;v1&#93;&#62;\n"));
+    assert!(report.contains("- Stream — feed\n"));
+    assert!(report.contains("- Dry basis — synthetic-matched-moisture-and-assay-dry-state/v1\n"));
+    assert!(report.contains("- Reporting interval — `[0, 20)` UTC nanoseconds since Unix epoch\n"));
     assert!(report.contains("Planning moisture is 1/3 of wet mass"));
     assert!(report.contains("All dry masses and effects are in kg"));
-    assert!(report.contains("| lot-1 | 200/3 | 90 | 99 | 70/3 | 9 | 97/3 | line "));
-    assert!(report.contains("| lot-2 | 400/3 | 160 | 152 | 80/3 | -8 | 56/3 | line "));
+    assert!(report.contains("| lot-1 | 200/3 | 90 | 99 | 70/3 | 9 | 97/3 | Wet weight line 34, moisture line 44, reference line "));
+    assert!(report.contains("| lot-2 | 400/3 | 160 | 152 | 80/3 | -8 | 56/3 | Wet weight line 64, moisture line 74, reference line "));
     assert!(report.contains("| **Total** | 200 | 250 | 251 | 50 | 1 | 51 |"));
     let lot_rows = at(&json, &["payload", "dry_mass_bridge", "lots"])
         .as_array()
         .unwrap();
     let line = at(&lot_rows[1], &["reference_line"]).i64().unwrap();
     assert!(report.contains(&format!(
-        "line {line}, synthetic&#124;&#60;scale&#62;&#38;&#91;lot-2&#93;"
+        "reference line {line} (synthetic&#124;&#60;scale&#62;&#38;&#91;lot-2&#93;)"
     )));
     assert!(!report.contains("synthetic|<scale>"));
     assert!(report.contains("Assumed, Internal and uncalibrated"));

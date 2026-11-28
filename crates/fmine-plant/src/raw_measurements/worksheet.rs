@@ -408,8 +408,10 @@ fn dry_mass_bridge(
                     )
                 })
         };
-        let measured = &get_observation("wet_mass")?.claim.value;
-        let moisture = &get_observation("moisture")?.claim.value;
+        let wet_observation = get_observation("wet_mass")?;
+        let moisture_observation = get_observation("moisture")?;
+        let measured = &wet_observation.claim.value;
+        let moisture = &moisture_observation.claim.value;
         let interval = ValidTime {
             start_ns: integer(get(f, "start_ns")?)?,
             end_ns: integer(get(f, "end_ns")?)?,
@@ -451,9 +453,11 @@ fn dry_mass_bridge(
         let comparison = with_effects(stages)?;
         let reference_source = get(f, "source")?.0;
         markdown_rows.push_str(&format!(
-            "| {} | {} | line {line}, {} |\n",
+            "| {} | {} | Wet weight line {}, moisture line {}, reference line {line} ({}) |\n",
             markdown_text(lot),
             bridge_markdown_row(comparison),
+            wet_observation.line,
+            moisture_observation.line,
             markdown_text(reference_source),
         ));
         rendered.push(format!(
@@ -475,7 +479,7 @@ fn dry_mass_bridge(
     let markdown = format!(
         concat!(
             "Planning moisture is {} of wet mass (worksheet line {}). All dry masses and effects are in kg.\n\n",
-            "| Lot | Planned dry | At measured moisture | At reference weight | Moisture effect | Wet-weight effect | Net change | Declared weight reference |\n",
+            "| Lot | Planned dry | At measured moisture | At reference weight | Moisture effect | Wet-weight effect | Net change | Worksheet inputs |\n",
             "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n",
             "{}",
             "| **Total** | {} | |\n\n",
@@ -1112,9 +1116,18 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult, Re
     });
     let markdown = bridge.map(|bridge| {
         format!(
-            "# Dry-mass bridge\n\nWorksheet {} (SHA-256 `{}`).\n\n{}",
+            concat!(
+                "# Dry-mass bridge\n\nWorksheet {} (SHA-256 `{}`).\n\n",
+                "- Boundary — {}\n- Stream — {}\n- Dry basis — {}\n",
+                "- Reporting interval — `[{}, {})` UTC nanoseconds since Unix epoch\n\n{}",
+            ),
             markdown_text(&source.artifact_path),
             Digest32(source.artifact_sha256).to_hex(),
+            markdown_text(&declaration.scope.boundary),
+            markdown_text(declaration.stream.as_str()),
+            markdown_text(&declaration.dry_basis),
+            declaration.scope.interval.start_ns,
+            declaration.scope.interval.end_ns,
             bridge.markdown,
         )
     });
