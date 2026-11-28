@@ -259,6 +259,10 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
 - `cutoff::routing::try_solve_horizon` (DESIGN, BD-252 §15.6, bd-vslr) is the same fixed-horizon solve
   with a distinct no-solution result for infeasible caps. Input errors and uncertified arithmetic remain typed
   refusals. The CLI uses this distinction when comparing exclusive circuit modes with discounted switch costs.
+- A period may declare a nonnegative minimum on the same recovered-metal quantity as its market cap
+  (DESIGN, BD-252 §15.6, bd-o3xt). The exact LP uses a lower-bound row for a positive minimum. A period with
+  a binding minimum can process negative-margin feed. A cap below the minimum is infeasible, so a quote
+  that raises the cap can be evaluated against the same commitment.
 - Named assay windows (DESIGN, BD-252 §15.6, bd-h6g6) share up to three dry-mass
   constituent coordinates across parcels. Each route can bound each blended fraction
   above, below or on both sides, with independently exact rows. The optimizer

@@ -1674,6 +1674,27 @@ worth **USD 32** before the quote and **USD 22** after it. The optimizer checks 
 and breaks exact value ties by fewer changes, then by the declared mode order. It assumes a
 changeover fits between periods.
 
+### Screen firm deliveries and quotes that make them feasible
+
+Set `market_recovered_metal_minimum` in a single period or in each relevant horizon period.
+Use the same recovered-metal unit as the market cap. Each period must meet its own
+minimum, even if doing so requires processing negative-margin feed.
+
+```bash
+cargo run -p fmine-cli -- plan blend \
+  --input tests/planning/route_blend_delivery_commitment.json --format markdown
+```
+
+The synthetic mill owes 6 g in week one, but both its throughput and market cap limit
+delivery to 4 g. Either capacity increase alone is insufficient. The cheapest feasible
+package costs **USD 2** and leaves **−USD 1.50** of discounted contribution after the
+quote. A **USD 4** package also raises week-two throughput and leaves **USD 0** after the
+quote. Each option is evaluated against the same commitments and any declared campaign
+constraints. An infeasible baseline with submitted quotes returns
+`fmine.route-blend-feasibility.v1`, with the lowest quoted cost and the highest
+contribution after the quote shown separately. Incremental value and break-even cost
+are unavailable for that baseline.
+
 ### Generate and check production schedules with destination splits
 
 `plan schedule` makes the existing PCPSP scheduling and bound solvers available through the CLI.

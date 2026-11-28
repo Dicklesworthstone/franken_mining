@@ -56,6 +56,7 @@ pub struct Scenario<'a> {
     pub pairs: &'a [RoutePair],
     pub physical_grade_limit: Rat,
     pub market_recovered_metal_cap: Rat,
+    pub market_recovered_metal_minimum: Option<Rat>,
     pub price_per_metal_unit: Rat,
     pub selling_cost_per_metal_unit: Rat,
 }
@@ -68,6 +69,8 @@ pub struct Period<'a> {
     pub arrivals_dry_tonnes: &'a [Rat],
     pub discount_factor: Rat,
     pub market_recovered_metal_cap: Rat,
+    /// A lower bound on the same recovered-metal quantity as the market cap.
+    pub market_recovered_metal_minimum: Option<Rat>,
     pub price_per_metal_unit: Rat,
     pub selling_cost_per_metal_unit: Rat,
 }
@@ -170,6 +173,7 @@ pub fn solve(scenario: Scenario<'_>) -> Result<Routing, Refusal> {
         arrivals_dry_tonnes: &[],
         discount_factor: ONE,
         market_recovered_metal_cap: scenario.market_recovered_metal_cap,
+        market_recovered_metal_minimum: scenario.market_recovered_metal_minimum,
         price_per_metal_unit: scenario.price_per_metal_unit,
         selling_cost_per_metal_unit: scenario.selling_cost_per_metal_unit,
     };
@@ -243,6 +247,7 @@ fn period_model(
         routes,
         pairs,
         market_recovered_metal_cap,
+        market_recovered_metal_minimum,
         price_per_metal_unit,
         selling_cost_per_metal_unit,
         ..
@@ -260,6 +265,9 @@ fn period_model(
         return Err(domain(
             "price, selling cost and market cap must be nonnegative",
         ));
+    }
+    if market_recovered_metal_minimum.is_some_and(|minimum| minimum.signum() < 0) {
+        return Err(domain("the recovered-metal commitment must be nonnegative"));
     }
     let mut rhs = Vec::with_capacity(3 * routes.len() + 1);
     let mut route_rows = Vec::with_capacity(routes.len());
@@ -337,6 +345,14 @@ fn period_model(
         )?;
         margins.push(sub(mul(recovered, net_price)?, cost)?);
     }
+    if let Some(minimum) = market_recovered_metal_minimum.filter(|minimum| minimum.signum() > 0) {
+        let lower = rows[market_row]
+            .iter()
+            .map(|&coefficient| sub(ZERO, coefficient))
+            .collect::<Result<_, _>>()?;
+        rows.push(lower);
+        rhs.push(sub(ZERO, minimum)?);
+    }
     Ok(PeriodModel {
         rows,
         rhs,
@@ -351,8 +367,17 @@ fn period_model(
 /// # Errors
 /// Refuses invalid periods, arrivals or caps, infeasible stock limits, and uncertified exact solutions.
 pub fn solve_horizon(horizon: Horizon<'_>) -> Result<HorizonRouting, Refusal> {
-    try_solve_horizon(horizon)?
-        .ok_or_else(|| domain("no routing can satisfy the declared stockpile and processing caps"))
+    try_solve_horizon(horizon)?.ok_or_else(|| {
+        if horizon
+            .periods
+            .iter()
+            .any(|period| period.market_recovered_metal_minimum.is_some())
+        {
+            domain("no routing can satisfy the declared caps and recovered-metal commitments")
+        } else {
+            domain("no routing can satisfy the declared stockpile and processing caps")
+        }
+    })
 }
 
 /// Solve a fixed horizon in a comparison of alternatives, returning `None` for infeasibility.

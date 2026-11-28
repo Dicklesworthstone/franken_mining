@@ -1,0 +1,54 @@
+{
+  "schema": "fmine.route-blend-horizon.v1",
+  "currency": "USD",
+  "metal": "Au",
+  "metal_unit": "g",
+  "ore_mass_basis": "dry_metric_tonne",
+  "ownership_basis": "100_percent_project",
+  "evidence": "synthetic",
+  "parcels": [
+    { "id": "opening-ore", "available_dry_tonnes": "5", "grade_per_dry_tonne": "2" }
+  ],
+  "periods": [
+    {
+      "id": "week-1",
+      "discount_factor": "1",
+      "arrivals": [],
+      "market_recovered_metal_minimum": "6",
+      "market_recovered_metal_cap": "4",
+      "price_per_metal_unit": "6",
+      "selling_cost_per_metal_unit": "0",
+      "routes": [
+        { "id": "mill", "dry_tonnes_cap": "2", "milling_cost_per_dry_tonne": "13",
+          "pairs": [{ "parcel": "opening-ore", "recovery_fraction": "1", "haul_cost_per_dry_tonne": "0" }] }
+      ]
+    },
+    {
+      "id": "week-2",
+      "discount_factor": "0.5",
+      "arrivals": [],
+      "market_recovered_metal_cap": "4",
+      "price_per_metal_unit": "10",
+      "selling_cost_per_metal_unit": "0",
+      "routes": [
+        { "id": "mill", "dry_tonnes_cap": "1", "milling_cost_per_dry_tonne": "13",
+          "pairs": [{ "parcel": "opening-ore", "recovery_fraction": "1", "haul_cost_per_dry_tonne": "0" }] }
+      ]
+    }
+  ],
+  "capacity_options": [
+    { "id": "mill-only", "kind": "route_throughput", "period": "week-1", "route": "mill",
+      "increase": "1", "present_value_cost": "1" },
+    { "id": "offtake-only", "kind": "market", "period": "week-1",
+      "increase": "2", "present_value_cost": "1" },
+    { "id": "joint", "present_value_cost": "2", "changes": [
+      { "kind": "route_throughput", "period": "week-1", "route": "mill", "increase": "1" },
+      { "kind": "market", "period": "week-1", "increase": "2" }
+    ] },
+    { "id": "joint-plus", "present_value_cost": "4", "changes": [
+      { "kind": "route_throughput", "period": "week-1", "route": "mill", "increase": "1" },
+      { "kind": "market", "period": "week-1", "increase": "2" },
+      { "kind": "route_throughput", "period": "week-2", "route": "mill", "increase": "1" }
+    ] }
+  ]
+}

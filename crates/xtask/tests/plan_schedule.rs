@@ -30,6 +30,187 @@ fn binary() -> PathBuf {
 }
 
 #[test]
+fn plan_blend_screens_firm_deliveries_and_feasibility_restoring_quotes() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let input = std::path::Path::new("tests/planning/route_blend_delivery_commitment.json");
+    let original = std::fs::read_to_string(root.join(input)).unwrap();
+    let output = blend(&root, input, "json");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(blend(&root, input, "json").stdout, output.stdout);
+    let envelope = blend_envelope(&output);
+    let payload = envelope.get("payload").unwrap();
+    expect(
+        payload.get("source").unwrap(),
+        "sha256",
+        &sha256(original.as_bytes()).to_hex(),
+    );
+    expect(payload, "schema", "fmine.route-blend-feasibility.v1");
+    assert_eq!(payload.get("total"), Some(&Json::Null));
+    let periods = payload.get("periods").unwrap().as_array().unwrap();
+    expect(&periods[0], "market_recovered_metal_minimum", "6/1");
+    expect(&periods[0], "market_recovered_metal_cap", "4/1");
+    let comparison = payload.get("capacity_comparison").unwrap();
+    expect(comparison, "baseline_status", "infeasible");
+    assert_eq!(
+        comparison.get("base_discounted_contribution"),
+        Some(&Json::Null)
+    );
+    assert_eq!(
+        comparison.get("cheapest_feasible_options"),
+        Some(&Json::Array(vec![Json::String("joint".into())]))
+    );
+    assert_eq!(
+        comparison.get("best_feasible_options"),
+        Some(&Json::Array(vec![Json::String("joint-plus".into())]))
+    );
+    let options = comparison.get("options").unwrap().as_array().unwrap();
+    assert_eq!(options.len(), 4);
+    for (option, id) in options
+        .iter()
+        .zip(["mill-only", "offtake-only", "joint", "joint-plus"])
+    {
+        expect(option, "id", id);
+        assert_eq!(
+            option.get("break_even_present_value_cost"),
+            Some(&Json::Null)
+        );
+        assert_eq!(
+            option.get("net_present_value_improvement"),
+            Some(&Json::Null)
+        );
+    }
+    for option in &options[..2] {
+        expect(option, "feasibility", "infeasible");
+        expect(option, "present_value_cost", "1/1");
+        assert_eq!(option.get("discounted_contribution"), Some(&Json::Null));
+        assert_eq!(option.get("total"), Some(&Json::Null));
+    }
+    for (option, gross, cost, net, second) in [
+        (&options[2], "1/2", "2/1", "-3/2", "2/1"),
+        (&options[3], "4/1", "4/1", "0/1", "4/1"),
+    ] {
+        expect(option, "feasibility", "feasible");
+        expect(option, "discounted_contribution", gross);
+        expect(option, "present_value_cost", cost);
+        expect(option, "contribution_after_quote", net);
+        let deliveries = option.get("period_deliveries").unwrap().as_array().unwrap();
+        expect(&deliveries[0], "recovered_metal", "6/1");
+        expect(&deliveries[1], "recovered_metal", second);
+    }
+    let markdown = blend(&root, input, "markdown");
+    assert!(markdown.status.success());
+    let markdown = String::from_utf8(markdown.stdout).unwrap();
+    assert!(markdown.contains("**Lowest quoted cost** joint at **2/1 USD**"));
+    assert!(markdown.contains("**Highest contribution after quote** joint-plus at **0/1 USD**"));
+
+    let scratch = std::env::temp_dir().join(format!(
+        "fmine-delivery-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&scratch).unwrap();
+    let submit = |name: &str, worksheet: &str| {
+        let path = scratch.join(name);
+        std::fs::write(&path, worksheet).unwrap();
+        blend_envelope(&blend(&root, &path, "json"))
+    };
+    let single = r#"{
+      "schema":"fmine.route-blend.v1","period":"week-1","currency":"USD",
+      "metal":"Au","metal_unit":"g","ore_mass_basis":"dry_metric_tonne",
+      "ownership_basis":"100_percent_project","evidence":"synthetic",
+      "market_recovered_metal_minimum":"3","market_recovered_metal_cap":"4",
+      "price_per_metal_unit":"6","selling_cost_per_metal_unit":"0",
+      "parcels":[{"id":"ore","available_dry_tonnes":"3","grade_per_dry_tonne":"2"}],
+      "routes":[{"id":"mill","dry_tonnes_cap":"2","milling_cost_per_dry_tonne":"13",
+                 "pairs":[{"parcel":"ore","recovery_fraction":"1","haul_cost_per_dry_tonne":"0"}]}]
+    }"#;
+    for (name, worksheet, tonnes, margin) in [
+        ("loss", single.to_owned(), "3/2", "-3/2"),
+        (
+            "zero-margin",
+            single.replace(
+                r#""milling_cost_per_dry_tonne":"13""#,
+                r#""milling_cost_per_dry_tonne":"12""#,
+            ),
+            "3/2",
+            "0/1",
+        ),
+        (
+            "idle",
+            single.replace(
+                r#""market_recovered_metal_minimum":"3""#,
+                r#""market_recovered_metal_minimum":"0""#,
+            ),
+            "0/1",
+            "0/1",
+        ),
+    ] {
+        let result = submit(&format!("{name}.json"), &worksheet);
+        let total = result.get("payload").unwrap().get("total").unwrap();
+        expect(total, "dry_tonnes", tonnes);
+        expect(total, "incremental_contribution", margin);
+    }
+    for invalid in ["-1", "5"] {
+        let worksheet = single.replace(
+            r#""market_recovered_metal_minimum":"3""#,
+            &format!(r#""market_recovered_metal_minimum":"{invalid}""#),
+        );
+        let result = submit(&format!("invalid-{invalid}.json"), &worksheet);
+        assert_eq!(result.get("payload"), Some(&Json::Null));
+        expect(result.get("refusal").unwrap(), "code", "FMINE-REF-109");
+    }
+    let (before_quotes, _) = original.split_once(",\n  \"capacity_options\":").unwrap();
+    let result = submit("without-quote.json", &format!("{before_quotes}\n}}"));
+    assert_eq!(result.get("payload"), Some(&Json::Null));
+    expect(result.get("refusal").unwrap(), "code", "FMINE-REF-109");
+    let invalid = original.replace(
+        r#""market_recovered_metal_minimum": "6""#,
+        r#""market_recovered_metal_minimum": "-6""#,
+    );
+    let result = submit("negative-commitment-with-quotes.json", &invalid);
+    assert_eq!(result.get("payload"), Some(&Json::Null));
+    expect(result.get("refusal").unwrap(), "code", "FMINE-REF-109");
+
+    let campaign = include_str!("../../../tests/planning/route_blend_campaign.json");
+    let (campaign, _) = campaign.split_once(",\n  \"capacity_options\":").unwrap();
+    let campaign = campaign
+        .replace(r#""dry_tonnes": "2""#, r#""dry_tonnes": "3""#)
+        .replace(
+            r#""price_per_metal_unit": "100""#,
+            r#""market_recovered_metal_minimum": "6", "price_per_metal_unit": "100""#,
+        );
+    let campaign = format!(
+        r#"{campaign},
+        "capacity_options":[{{"id":"more-acid","kind":"route_throughput","period":"week-2","route":"acid",
+          "increase":"1","present_value_cost":"10"}}]}}"#
+    );
+    let result = submit("campaign-rescue.json", &campaign);
+    let comparison = result
+        .get("payload")
+        .unwrap()
+        .get("capacity_comparison")
+        .unwrap();
+    let option = &comparison.get("options").unwrap().as_array().unwrap()[0];
+    expect(option, "feasibility", "feasible");
+    expect(option, "contribution_after_quote", "718/1");
+    let selected = option
+        .get("campaign")
+        .unwrap()
+        .get("period_modes")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    expect(&selected[1], "mode", "acid");
+}
+
+#[test]
 fn plan_blend_optimizes_exclusive_campaigns_after_discounted_changeovers() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let input = std::path::Path::new("tests/planning/route_blend_campaign.json");
@@ -182,7 +363,21 @@ fn plan_blend_optimizes_exclusive_campaigns_after_discounted_changeovers() {
         r#""id": "high-carbonate", "available_dry_tonnes": "2""#,
         r#""id": "high-carbonate", "available_dry_tonnes": "2", "stockpile_cap_dry_tonnes": "0""#,
     );
-    let result = submit("infeasible.json", &impossible);
+    let rescue = submit("infeasible-quote.json", &impossible);
+    let comparison = rescue
+        .get("payload")
+        .unwrap()
+        .get("capacity_comparison")
+        .unwrap();
+    expect(comparison, "baseline_status", "infeasible");
+    let options = comparison.get("options").unwrap().as_array().unwrap();
+    expect(&options[0], "feasibility", "infeasible");
+    assert_eq!(options[0].get("total"), Some(&Json::Null));
+    let (before_quotes, _) = impossible.split_once(",\n  \"capacity_options\":").unwrap();
+    let result = submit(
+        "infeasible-without-quote.json",
+        &format!("{before_quotes}\n}}"),
+    );
     assert_eq!(result.get("payload"), Some(&Json::Null));
     expect(result.get("refusal").unwrap(), "code", "FMINE-REF-109");
     assert!(
