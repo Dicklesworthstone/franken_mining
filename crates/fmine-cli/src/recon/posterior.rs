@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use fmine_core::anchor::SourceAnchor;
 use fmine_core::cert::{DeterminismClass, InputDigest};
 use fmine_core::det;
-use fmine_core::hash::{Digest32, sha256};
+use fmine_core::hash::{Digest32, blake3_hash, sha256};
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_recon::bias::{
     BiasObservation, BiasTargetKind, HierarchicalBiasRequest, HierarchicalBiasResult,
@@ -292,6 +292,7 @@ fn parse_bool_field(
 
 fn parse_terms(spec: &str, key: &str) -> Result<Vec<(String, f64)>, Refusal> {
     let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
     for raw in spec.split(',') {
         let piece = raw.trim();
         let Some((id_raw, coeff_raw)) = piece.split_once(':') else {
@@ -302,6 +303,11 @@ fn parse_terms(spec: &str, key: &str) -> Result<Vec<(String, f64)>, Refusal> {
         let id = id_raw.trim();
         if id.is_empty() {
             return Err(input_err(format!("field '{key}' has empty variable id")));
+        }
+        if !seen.insert(id.to_string()) {
+            return Err(input_err(format!(
+                "field '{key}' contains duplicate variable id '{id}'"
+            )));
         }
         let coeff = parse_f64_token(coeff_raw.trim(), key)?;
         out.push((id.to_string(), coeff));
@@ -384,8 +390,14 @@ fn parse_voi_kind(raw: &str) -> Result<CandidateMeasurementKind, Refusal> {
 }
 
 fn sanitize_token(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+    const MAX_SLUG_CHARS: usize = 40;
+    let mut out = String::with_capacity(s.len().min(MAX_SLUG_CHARS));
+    let mut truncated = false;
     for ch in s.chars() {
+        if out.len() >= MAX_SLUG_CHARS {
+            truncated = true;
+            break;
+        }
         if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
             out.push(ch);
         } else {
@@ -393,17 +405,55 @@ fn sanitize_token(s: &str) -> String {
         }
     }
     if out.is_empty() {
-        "recon".to_string()
-    } else {
-        out
+        out.push_str("recon");
+    }
+    if truncated {
+        let h = blake3_hash(s.as_bytes()).to_hex();
+        out.push('_');
+        out.push_str(&h[..8]);
+    }
+    out
+}
+
+fn format_channel(channel: &ExtensiveChannel) -> String {
+    match channel {
+        ExtensiveChannel::DryMass => "dry_mass".to_string(),
+        ExtensiveChannel::WaterMass => "water_mass".to_string(),
+        ExtensiveChannel::Element(el) => format!("element:{el}"),
     }
 }
 
 fn var_label(key: &VariableKey) -> String {
     match key {
-        VariableKey::Stream { stream_id, channel } => format!("stream:{stream_id}:{channel:?}"),
-        VariableKey::InventoryDelta { node_id, channel } => format!("inv:{node_id}:{channel:?}"),
-        VariableKey::Named { name, channel } => format!("named:{name}:{channel:?}"),
+        VariableKey::Stream { stream_id, channel } => {
+            format!("stream:{stream_id}:{}", format_channel(channel))
+        }
+        VariableKey::InventoryDelta { node_id, channel } => {
+            format!("inv:{node_id}:{}", format_channel(channel))
+        }
+        VariableKey::Named { name, channel } => {
+            format!("named:{name}:{}", format_channel(channel))
+        }
+    }
+}
+
+fn is_lower_hex_64(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+fn is_ascii_hex_64(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn json_f64(v: f64) -> String {
+    if v.is_finite() {
+        if v == 0.0 {
+            "0".to_string()
+        } else {
+            v.to_string()
+        }
+    } else {
+        "null".to_string()
     }
 }
 
@@ -546,12 +596,14 @@ fn evaluate_posterior(
     let mut covariances: Vec<CovarianceOffDiagonal> = Vec::new();
     let mut constraints: Vec<NamedLinearConstraint> = Vec::new();
     let mut factor_specs: Vec<FactorSpec> = Vec::new();
+    let mut seen_factor_keys: BTreeSet<String> = BTreeSet::new();
     let mut parity_notes: Vec<ParityExplanation> = Vec::new();
     let mut bias_groups: Vec<HierarchicalGroupPrior> = Vec::new();
     let mut bias_nodes: Vec<NodeBiasSpec> = Vec::new();
     let mut bias_obs: Vec<BiasObservation> = Vec::new();
     let mut voi_specs: Vec<VoiCandSpec> = Vec::new();
     let mut forecast_scores: Vec<RegisteredForecastScore> = Vec::new();
+    let mut seen_forecast_ids: BTreeSet<String> = BTreeSet::new();
 
     for row in &doc.rows {
         let f = &row.fields;
@@ -651,6 +703,12 @@ fn evaluate_posterior(
                     &[],
                 )?;
                 let registry_key = req_str(f, "registry_key")?.to_string();
+                if !seen_factor_keys.insert(registry_key.clone()) {
+                    return Err(input_err(format!(
+                        "line {}: duplicate f_factor registry_key '{registry_key}'",
+                        row.line
+                    )));
+                }
                 let definition_version = match get_field(f, "definition_version") {
                     Some(TomlValue::Str(s)) => s.clone(),
                     _ => String::new(),
@@ -663,6 +721,15 @@ fn evaluate_posterior(
                             row.line
                         ),
                     ));
+                }
+                if definition_version.len() > 4096
+                    || definition_version.trim() != definition_version
+                    || definition_version.chars().any(char::is_control)
+                {
+                    return Err(input_err(format!(
+                        "line {}: f_factor '{registry_key}' definition_version must be bounded text without edge whitespace or control chars",
+                        row.line
+                    )));
                 }
                 factor_specs.push(FactorSpec {
                     registry_key,
@@ -755,9 +822,16 @@ fn evaluate_posterior(
                     &["label", "terms", "observed", "obs_sd"],
                     &["period_index"],
                 )?;
+                let period_index_u64 = opt_u64(f, "period_index", 0)?;
+                let period_index = u32::try_from(period_index_u64).map_err(|_| {
+                    input_err(format!(
+                        "line {}: period_index {period_index_u64} exceeds u32::MAX",
+                        row.line
+                    ))
+                })?;
                 bias_obs.push(BiasObservation {
                     label: req_str(f, "label")?.to_string(),
-                    period_index: opt_u64(f, "period_index", 0)? as u32,
+                    period_index,
                     terms: parse_terms(req_str(f, "terms")?, "bias_obs.terms")?,
                     observed: req_f64(f, "observed")?,
                     obs_sd: req_f64(f, "obs_sd")?,
@@ -790,9 +864,23 @@ fn evaluate_posterior(
                     ],
                     &[],
                 )?;
+                let forecast_id = req_str(f, "forecast_id")?.to_string();
+                if !seen_forecast_ids.insert(forecast_id.clone()) {
+                    return Err(input_err(format!(
+                        "line {}: duplicate forecast_score forecast_id '{forecast_id}'",
+                        row.line
+                    )));
+                }
+                let forecast_digest_hex = req_str(f, "forecast_digest_hex")?.to_string();
+                if !is_lower_hex_64(&forecast_digest_hex) {
+                    return Err(input_err(format!(
+                        "line {}: forecast_score '{forecast_id}' forecast_digest_hex must be 64 lowercase hex characters",
+                        row.line
+                    )));
+                }
                 forecast_scores.push(RegisteredForecastScore {
-                    forecast_id: req_str(f, "forecast_id")?.to_string(),
-                    forecast_digest_hex: req_str(f, "forecast_digest_hex")?.to_string(),
+                    forecast_id,
+                    forecast_digest_hex,
                     realized_mean: req_f64(f, "realized_mean")?,
                     interval_covered: parse_bool_field(f, "interval_covered", None)?,
                     crps: req_f64(f, "crps")?,
@@ -837,12 +925,23 @@ fn evaluate_posterior(
     for (idx, key) in linear.variables.iter().enumerate() {
         let mean = linear.estimates[idx];
         let sd = linear.posterior_std_devs[idx];
+        let ci_lower = mean - z_crit * sd;
+        let ci_upper = mean + z_crit * sd;
+        if !(mean.is_finite() && sd.is_finite() && ci_lower.is_finite() && ci_upper.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NumericalCertificateFailed207,
+                format!(
+                    "non-finite posterior interval on variable '{}'",
+                    var_label(key)
+                ),
+            ));
+        }
         let entry = CertifiedQuantityInterval {
             id: var_label(key),
             mean,
             std_dev: sd,
-            ci_lower: mean - z_crit * sd,
-            ci_upper: mean + z_crit * sd,
+            ci_lower,
+            ci_upper,
         };
         if matches!(key, VariableKey::InventoryDelta { .. }) {
             latent_inventories.push(entry);
@@ -894,12 +993,30 @@ fn evaluate_posterior(
         let g_d = -mu_n / (mu_d * mu_d);
         let var_r = (g_n * g_n * v_nn + 2.0 * g_n * g_d * v_nd + g_d * g_d * v_dd).max(0.0);
         let sd_r = det::sqrt(var_r);
+        let ci_lower = ratio - z_crit * sd_r;
+        let ci_upper = ratio + z_crit * sd_r;
+        if !(ratio.is_finite()
+            && g_n.is_finite()
+            && g_d.is_finite()
+            && var_r.is_finite()
+            && sd_r.is_finite()
+            && ci_lower.is_finite()
+            && ci_upper.is_finite())
+        {
+            return Err(Refusal::new(
+                RefusalCode::NumericalCertificateFailed207,
+                format!(
+                    "f_factor '{}' delta-method ratio/variance overflowed binary64 range",
+                    fs.registry_key
+                ),
+            ));
+        }
         f_factors.push(CertifiedFactorInterval {
             registry_key: fs.registry_key.clone(),
             definition_version: fs.definition_version.clone(),
             mean: ratio,
-            ci_lower: ratio - z_crit * sd_r,
-            ci_upper: ratio + z_crit * sd_r,
+            ci_lower,
+            ci_upper,
         });
     }
 
@@ -1007,10 +1124,16 @@ fn evaluate_posterior(
         .filter(|s| s.flagged)
         .map(|s| var_label(&s.variable))
         .collect();
+    let degrees_of_freedom = u32::try_from(gross_error.degrees_of_freedom).map_err(|_| {
+        Refusal::new(
+            RefusalCode::NumericalCertificateFailed207,
+            "degrees_of_freedom exceeds u32::MAX",
+        )
+    })?;
     let cert_balance = BalanceCertificateSummary {
         node_residuals,
         chi_square: gross_error.global_chi_square,
-        degrees_of_freedom: gross_error.degrees_of_freedom as u32,
+        degrees_of_freedom,
         global_p_value: gross_error.global_p_value,
         max_relative_closure_error: linear.max_relative_closure_error,
         disposition: gross_error.disposition,
@@ -1018,8 +1141,18 @@ fn evaluate_posterior(
     };
     let cert_identifiability = match &identifiability {
         Some(rep) => IdentifiabilityCertificateSummary {
-            observation_rank: rep.observation_rank as u32,
-            parameter_count: rep.parameter_count as u32,
+            observation_rank: u32::try_from(rep.observation_rank).map_err(|_| {
+                Refusal::new(
+                    RefusalCode::NumericalCertificateFailed207,
+                    "observation_rank exceeds u32::MAX",
+                )
+            })?,
+            parameter_count: u32::try_from(rep.parameter_count).map_err(|_| {
+                Refusal::new(
+                    RefusalCode::NumericalCertificateFailed207,
+                    "parameter_count exceeds u32::MAX",
+                )
+            })?,
             refused_pairs: refused_pairs.clone(),
         },
         None => IdentifiabilityCertificateSummary {
@@ -1208,14 +1341,14 @@ fn posterior_core_json(eval: &EvaluatedPosterior, source_json: &str) -> String {
         .enumerate()
         .map(|(i, k)| {
             let z = eval.linear.normalized_adjustments[i]
-                .map_or_else(|| "null".to_string(), |v| format!("{v}"));
+                .map_or_else(|| "null".to_string(), json_f64);
             format!(
                 "{{\"variable\":{},\"observed\":{},\"reconciled\":{},\"adjustment\":{},\"posterior_sd\":{},\"normalized_adjustment\":{z}}}",
                 quote(&var_label(k)),
-                eval.linear.observed[i],
-                eval.linear.estimates[i],
-                eval.linear.adjustments[i],
-                eval.linear.posterior_std_devs[i],
+                json_f64(eval.linear.observed[i]),
+                json_f64(eval.linear.estimates[i]),
+                json_f64(eval.linear.adjustments[i]),
+                json_f64(eval.linear.posterior_std_devs[i]),
             )
         })
         .collect();
@@ -1227,9 +1360,9 @@ fn posterior_core_json(eval: &EvaluatedPosterior, source_json: &str) -> String {
                 "{{\"registry_key\":{},\"definition_version\":{},\"mean\":{},\"ci_lower\":{},\"ci_upper\":{}}}",
                 quote(&f.registry_key),
                 quote(&f.definition_version),
-                f.mean,
-                f.ci_lower,
-                f.ci_upper,
+                json_f64(f.mean),
+                json_f64(f.ci_lower),
+                json_f64(f.ci_upper),
             )
         })
         .collect();
@@ -1241,10 +1374,10 @@ fn posterior_core_json(eval: &EvaluatedPosterior, source_json: &str) -> String {
                 "{{\"first\":{},\"second\":{},\"correlation\":{},\"refusal_code\":\"FMINE-REF-104\",\"determined_contrast\":{},\"separating_measurement\":{},\"net_voi_usd\":{}}}",
                 quote(&rp.first),
                 quote(&rp.second),
-                rp.correlation,
+                json_f64(rp.correlation),
                 quote(&rp.determined_contrast),
                 quote(&rp.separating_measurement),
-                rp.net_voi_usd,
+                json_f64(rp.net_voi_usd),
             )
         })
         .collect();
@@ -1255,12 +1388,12 @@ fn posterior_core_json(eval: &EvaluatedPosterior, source_json: &str) -> String {
         .map(|m| {
             let q_pct = m
                 .measurement_mdb_quarter_pct
-                .map_or_else(|| "null".to_string(), |v| format!("{v}"));
+                .map_or_else(|| "null".to_string(), json_f64);
             format!(
                 "{{\"variable\":{},\"single_period_mdb\":{},\"quarter_mdb\":{},\"quarter_mdb_pct\":{q_pct}}}",
                 quote(&var_label(&m.variable)),
-                m.measurement_mdb_single_period,
-                m.measurement_mdb_quarter,
+                json_f64(m.measurement_mdb_single_period),
+                json_f64(m.measurement_mdb_quarter),
             )
         })
         .collect();
@@ -1274,10 +1407,10 @@ fn posterior_core_json(eval: &EvaluatedPosterior, source_json: &str) -> String {
                 quote(s.kind.as_str()),
                 s.resolves_identifiability,
                 s.post_rank,
-                s.max_abs_corr_after,
-                s.expected_value_usd,
-                s.cost_usd,
-                s.net_voi_usd,
+                json_f64(s.max_abs_corr_after),
+                json_f64(s.expected_value_usd),
+                json_f64(s.cost_usd),
+                json_f64(s.net_voi_usd),
             )
         })
         .collect();
@@ -1293,14 +1426,14 @@ fn posterior_core_json(eval: &EvaluatedPosterior, source_json: &str) -> String {
         quote(&eval.evidence_cut_id),
         quote(&eval.error_model_version),
         quote(&eval.ownership_basis),
-        eval.confidence_level,
+        json_f64(eval.confidence_level),
         quote(&eval.linear.digest_hex),
         quote(&eval.review_target_digest),
-        eval.gross_error.global_chi_square,
+        json_f64(eval.gross_error.global_chi_square),
         eval.gross_error.degrees_of_freedom,
-        eval.gross_error.global_p_value,
-        eval.gross_error.global_critical_value,
-        eval.linear.max_relative_closure_error,
+        json_f64(eval.gross_error.global_p_value),
+        json_f64(eval.gross_error.global_critical_value),
+        json_f64(eval.linear.max_relative_closure_error),
         quote(disp),
         eval.cert_balance
             .flagged_suspects
@@ -1401,8 +1534,18 @@ fn close_inner(cmd: &CloseCommand, root: &Path) -> Result<Envelope, Refusal> {
                 "committed close requires --against-digest matching `fmine recon run` review_target_digest",
             ));
         };
-        if role.trim().is_empty() || role.chars().any(char::is_control) {
+        if role.trim().is_empty()
+            || role.trim() != role
+            || role.len() > 4096
+            || role.chars().any(char::is_control)
+        {
             return Err(domain_err("invalid --reviewer-role value"));
+        }
+        if !is_ascii_hex_64(against) {
+            return Err(Refusal::new(
+                RefusalCode::DigestMismatch505,
+                format!("--against-digest '{against}' must be a 64-character hex BLAKE3 digest"),
+            ));
         }
         if !against.eq_ignore_ascii_case(&eval.review_target_digest) {
             return Err(Refusal::new(
@@ -1433,9 +1576,9 @@ fn close_inner(cmd: &CloseCommand, root: &Path) -> Result<Envelope, Refusal> {
     let inputs_dir = out_dir.join("inputs");
     let input_copy_path = inputs_dir.join(&eval.input_locator);
 
-    if rcrt_path.exists() || cert_path.exists() {
+    if rcrt_path.exists() || cert_path.exists() || md_path.exists() || input_copy_path.exists() {
         return Err(input_err(format!(
-            "refusing to overwrite existing reconciliation certificate in '{}' (append-only close)",
+            "refusing to overwrite existing reconciliation certificate artifacts in '{}' (append-only close)",
             out_dir.display()
         )));
     }

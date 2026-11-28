@@ -104,7 +104,8 @@ fn req_str<'a>(fields: &'a [TomlField], key: &str) -> Result<&'a str, Refusal> {
 
 fn req_usize(fields: &[TomlField], key: &str) -> Result<usize, Refusal> {
     match fields.iter().find(|f| f.key == key).map(|f| &f.value) {
-        Some(TomlValue::Int(n)) if *n >= 0 => Ok(*n as usize),
+        Some(TomlValue::Int(n)) => usize::try_from(*n)
+            .map_err(|_| invalid(format!("field '{key}' must be a non-negative integer"))),
         Some(TomlValue::Str(s)) => s
             .parse::<usize>()
             .map_err(|_| invalid(format!("field '{key}' must be a non-negative integer"))),
@@ -117,9 +118,24 @@ fn req_usize(fields: &[TomlField], key: &str) -> Result<usize, Refusal> {
 fn req_f64(fields: &[TomlField], key: &str) -> Result<f64, Refusal> {
     let val = match fields.iter().find(|f| f.key == key).map(|f| &f.value) {
         Some(TomlValue::Int(n)) => *n as f64,
-        Some(TomlValue::Str(s)) => s
-            .parse::<f64>()
-            .map_err(|_| invalid(format!("field '{key}' must be a finite number")))?,
+        Some(TomlValue::Str(s)) => {
+            let trimmed = s.trim();
+            let v = trimmed
+                .parse::<f64>()
+                .map_err(|_| invalid(format!("field '{key}' must be a finite number")))?;
+            let nonzero_mantissa = trimmed
+                .split(['e', 'E'])
+                .next()
+                .unwrap_or("")
+                .bytes()
+                .any(|b| matches!(b, b'1'..=b'9'));
+            if !v.is_finite() || (v == 0.0 && nonzero_mantissa) {
+                return Err(invalid(format!(
+                    "field '{key}' must be finite and must not underflow to zero"
+                )));
+            }
+            v
+        }
         None => return Err(invalid(format!("missing required numeric field '{key}'"))),
     };
     if !val.is_finite() {
@@ -143,10 +159,16 @@ fn parse_ref_list(fields: &[TomlField], key: &str) -> Result<Vec<String>, Refusa
         return Ok(Vec::new());
     };
     let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
     for piece in raw.split(',') {
         let trimmed = piece.trim();
         if trimmed.is_empty() {
             return Err(invalid(format!("field '{key}' contains empty reference")));
+        }
+        if !seen.insert(trimmed.to_string()) {
+            return Err(invalid(format!(
+                "field '{key}' contains duplicate reference '{trimmed}'"
+            )));
         }
         out.push(trimmed.to_string());
     }

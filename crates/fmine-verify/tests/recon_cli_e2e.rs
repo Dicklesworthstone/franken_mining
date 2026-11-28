@@ -279,6 +279,72 @@ fn test_bd162_recon_run_and_attested_close_verified_by_fmine_verify() {
         nv_out.contains("FMINE-REF-107"),
         "G-TOUCH-4 must return FMINE-REF-107: {nv_out}"
     );
+
+    // 11. Duplicate terms in a constraint, period_index overflow, and long site/period filenames.
+    let dup_terms_toml = fs::read_to_string(root.join("tests/recon/posterior_gb24.toml"))
+        .expect("read fixture")
+        .replace(
+            "terms = \"truck_t:1, mill_t:-1, sp_delta_t:-1\"",
+            "terms = \"truck_t:1, truck_t:-1, mill_t:-1\"",
+        );
+    let dup_terms_path = work.join("dup_terms.toml");
+    fs::write(&dup_terms_path, &dup_terms_toml).expect("write dup_terms");
+    let (dt_out, dt_code) = fmine_cli::run(
+        &[
+            "recon".to_string(),
+            "run".to_string(),
+            "--input".to_string(),
+            dup_terms_path.to_string_lossy().to_string(),
+            "--json".to_string(),
+        ],
+        &root,
+    );
+    assert_ne!(dt_code, 0, "duplicate terms must refuse: {dt_out}");
+    assert!(dt_out.contains("FMINE-REF-506"));
+
+    // Long site and period names produce a bounded input_locator that closes & verifies cleanly.
+    let long_site = "S".repeat(200);
+    let long_period = "P".repeat(200);
+    let long_toml = fs::read_to_string(root.join("tests/recon/posterior_gb24.toml"))
+        .expect("read fixture")
+        .replace(
+            "site = \"synthetic_gb24_open_pit\"",
+            &format!("site = \"{long_site}\""),
+        )
+        .replace(
+            "period = \"2026-06\"",
+            &format!("period = \"{long_period}\""),
+        );
+    let long_path = work.join("long_names.toml");
+    fs::write(&long_path, &long_toml).expect("write long_names");
+    let long_close_dir = work.join("close_long_names");
+    let (lc_out, lc_code) = fmine_cli::run(
+        &[
+            "recon".to_string(),
+            "close".to_string(),
+            "--input".to_string(),
+            long_path.to_string_lossy().to_string(),
+            "--out-dir".to_string(),
+            long_close_dir.to_string_lossy().to_string(),
+            "--allow-draft".to_string(),
+            "--json".to_string(),
+        ],
+        &root,
+    );
+    assert_eq!(lc_code, 0, "long site/period close must succeed: {lc_out}");
+    let (lv_out, lv_code) = run_verify_cli(&[
+        "cert".to_string(),
+        long_close_dir
+            .join("recon_certificate.cert")
+            .to_string_lossy()
+            .to_string(),
+        "--inputs-dir".to_string(),
+        long_close_dir.join("inputs").to_string_lossy().to_string(),
+    ]);
+    assert_eq!(
+        lv_code, 0,
+        "fmine-verify must verify bounded long-name cert: {lv_out}"
+    );
 }
 
 #[test]
@@ -335,4 +401,46 @@ fn test_bd174_cli_drill_verify_index_renders_deterministically() {
     assert!(human.contains("DRAFT STANDARD — NOT IN FORCE"));
     assert!(human.contains("FIND-E164-DQO"));
     assert!(human.contains("ALS-Primary"));
+
+    // Underflowing float token ("1e-400") and duplicate original_refs must refuse cleanly.
+    let work = std::env::temp_dir().join(format!("fmine_bd174_e2e_{}", std::process::id()));
+    let _guard = TempDirGuard(work.clone());
+    fs::create_dir_all(&work).expect("create temp dir");
+
+    let base = fs::read_to_string(root.join("tests/drill/data_verification_index.toml"))
+        .expect("read verify-index fixture");
+    let underflow_toml = base.replace("cv_avr_pct = \"6.1\"", "cv_avr_pct = \"1e-400\"");
+    let uf_path = work.join("underflow.toml");
+    fs::write(&uf_path, &underflow_toml).expect("write underflow");
+    let (uf_out, uf_code) = fmine_cli::run(
+        &[
+            "drill".to_string(),
+            "verify-index".to_string(),
+            "--input".to_string(),
+            uf_path.to_string_lossy().to_string(),
+            "--json".to_string(),
+        ],
+        &root,
+    );
+    assert_ne!(uf_code, 0, "underflowing float must refuse: {uf_out}");
+    assert!(uf_out.contains("FMINE-REF-506"));
+
+    let dup_ref_toml = base.replace(
+        "original_refs = \"CERT-2025-01, SURV-2025-01\"",
+        "original_refs = \"CERT-2025-01, CERT-2025-01\"",
+    );
+    let dr_path = work.join("dup_ref.toml");
+    fs::write(&dr_path, &dup_ref_toml).expect("write dup_ref");
+    let (dr_out, dr_code) = fmine_cli::run(
+        &[
+            "drill".to_string(),
+            "verify-index".to_string(),
+            "--input".to_string(),
+            dr_path.to_string_lossy().to_string(),
+            "--json".to_string(),
+        ],
+        &root,
+    );
+    assert_ne!(dr_code, 0, "duplicate original_refs must refuse: {dr_out}");
+    assert!(dr_out.contains("FMINE-REF-506"));
 }
