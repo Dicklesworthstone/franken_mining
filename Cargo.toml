@@ -23,6 +23,7 @@ members = [
     "crates/fmine-recon",
     "crates/fmine-drill",
     "crates/fmine-qaqc",
+    "crates/fmine-geostat",
     "crates/fmine-econ",
     "crates/fmine-explore",
     "crates/fmine-infer",

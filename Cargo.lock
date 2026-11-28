@@ -825,6 +825,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-geostat"
+version = "0.1.0"
+dependencies = [
+ "fmine-claim",
+ "fmine-core",
+ "fmine-drill",
+ "fmine-evidence",
+ "fmine-numerics",
+]
+
+[[package]]
 name = "fmine-infer"
 version = "0.1.0"
 dependencies = [

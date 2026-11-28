@@ -1,0 +1,19 @@
+[package]
+name = "fmine-geostat"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+license.workspace = true
+authors.workspace = true
+description = "Strata variography: directional experimental semivariograms of drill composites, nested anisotropic variogram models and their weighted least-squares fit (BD-237)."
+
+[lints]
+workspace = true
+
+[dependencies]
+fmine-claim = { path = "../fmine-claim" }
+fmine-core = { path = "../fmine-core" }
+fmine-drill = { path = "../fmine-drill" }
+fmine-evidence = { path = "../fmine-evidence" }
+fmine-numerics = { path = "../fmine-numerics" }

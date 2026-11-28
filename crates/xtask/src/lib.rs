@@ -1668,7 +1668,8 @@ mod tests {
         // The operator CRM workflow adds fmine-drill::qaqc and the fmine-cli drill_qaqc adapter.
         // bd-149 adds fmine-recon's error and stats modules.
         // BD-121 adds the interval box bound (fmine-projection::drill::boxes).
-        assert_eq!(report.bitwise_files, 171, "{report:?}");
+        // BD-237 adds fmine-geostat's six modules: lib, error, samples, experimental, model and fit.
+        assert_eq!(report.bitwise_files, 177, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.
