@@ -72,6 +72,101 @@ fn exact(value: &Json) -> (i128, i128) {
     )
 }
 
+#[test]
+fn test_transfer_separates_moisture_and_same_lot_wet_weight_effects() {
+    let scale = r#"
+[[scale_reference]]
+lot = "lot-2"
+wet_kg = "190.00"
+start_ns = "10"
+end_ns = "20"
+source = "synthetic-check-scale/lot-2"
+
+[[scale_reference]]
+lot = "lot-1"
+wet_kg = "110.00"
+start_ns = "0"
+end_ns = "10"
+source = "synthetic-check-scale/lot-1"
+"#;
+    let declared = RAW.replacen(
+        "[[lot]]",
+        "planning_moisture = \"0.06\"\nreference_scale_independent = \"true\"\n\n[[lot]]",
+        1,
+    );
+    let input = format!("{declared}\n{scale}");
+    let input_path = scratch(&input);
+    let (status, output, text) = run(&input_path);
+    assert_eq!(status, 0, "{text}");
+    assert_eq!(run(&input_path).2, text);
+    let bridge = at(&output, &["payload", "dry_mass_bridge"]);
+    assert_eq!(exact(at(bridge, &["planning_moisture"])), (3, 50));
+    let totals = at(bridge, &["total"]);
+    for (key, expected) in [
+        ("planning_dry_kg", (282, 1)),
+        ("measured_moisture_dry_kg", (250, 1)),
+        ("reference_dry_kg", (251, 1)),
+        ("moisture_effect_kg", (-32, 1)),
+        ("wet_weight_effect_kg", (1, 1)),
+        ("net_effect_kg", (-31, 1)),
+    ] {
+        assert_eq!(exact(at(totals, &[key])), expected, "{key}");
+    }
+    let lots = at(bridge, &["lots"]).as_array().unwrap();
+    assert_eq!(lots.len(), 2);
+    for (lot, id, raw, effect) in [
+        (&lots[0], "lot-1", "110.00", 9),
+        (&lots[1], "lot-2", "190.00", -8),
+    ] {
+        assert_eq!(at(lot, &["lot"]).as_str(), Some(id));
+        assert_eq!(at(lot, &["reference_wet_kg_raw"]).as_str(), Some(raw));
+        assert_eq!(
+            at(lot, &["reference_source"]).as_str(),
+            Some(format!("synthetic-check-scale/{id}").as_str())
+        );
+        assert_eq!(exact(at(lot, &["wet_weight_effect_kg"])), (effect, 1));
+    }
+    let (legacy_status, legacy, _) = run(&scratch(RAW));
+    assert_eq!(legacy_status, 0);
+    assert!(at(&legacy, &["payload"]).get("dry_mass_bridge").is_none());
+    assert_eq!(
+        at(&output, &["payload", "result"]),
+        at(&legacy, &["payload", "result"]),
+    );
+    for (invalid, code) in [
+        (declared, "FMINE-REF-104"),
+        (
+            input.replace(
+                "reference_scale_independent = \"true\"",
+                "reference_scale_independent = \"false\"",
+            ),
+            "FMINE-REF-104",
+        ),
+        (
+            input.replace("planning_moisture = \"0.06\"", "planning_moisture = \"1\""),
+            "FMINE-REF-109",
+        ),
+        (
+            input.replace(
+                "wet_kg = \"190.00\"\nstart_ns = \"10\"",
+                "wet_kg = \"190.00\"\nstart_ns = \"11\"",
+            ),
+            "FMINE-REF-105",
+        ),
+        (
+            input.replace("wet_kg = \"190.00\"", "wet_kg = \"0\""),
+            "FMINE-REF-109",
+        ),
+        (format!("{input}\n{scale}"), "FMINE-REF-506"),
+    ] {
+        let (status, result, text) = run(&scratch(&invalid));
+        assert_ne!(status, 0, "{text}");
+        assert_eq!(at(&result, &["refusal", "code"]).as_str(), Some(code));
+        assert_eq!(at(&result, &["payload", "result"]), &Json::Null);
+        assert!(at(&result, &["payload"]).get("dry_mass_bridge").is_none());
+    }
+}
+
 fn observation<'a>(value: &'a Json, key: &str) -> &'a Json {
     at(value, &["payload", "observations"])
         .as_array()

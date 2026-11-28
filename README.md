@@ -873,6 +873,15 @@ yields 250 kg dry matter, 50 kg water and 4.1 kg Cu, with a weighted dry grade o
 source Claims, exact totals, full first-order covariance and a parent-linked nominal graph transfer. The
 first-order covariance remains distinct from a declared Gaussian reconciliation model.
 
+To explain a dry-mass discrepancy, add `planning_moisture` as a wet-basis fraction and
+`reference_scale_independent = "true"` at the top of the worksheet. Add one
+`[[scale_reference]]` per lot with quoted `lot`, `wet_kg`, `start_ns`, `end_ns`
+and `source` fields. Use the exact interval covered by that lot's wet-weight and
+moisture observations. The JSON `dry_mass_bridge` compares dry mass at planning
+moisture, at measured moisture, and at the reference wet weight. The first difference
+quantifies the moisture effect. The second quantifies the wet-weight effect at measured
+moisture. The result depends on the submitted reference and its declared independence.
+
 `plant flowsheet` fits all declared unit balances together, with each internal transfer shared by its two
 endpoints. Its worksheet explicitly supplies the graph, every stream and stocktake coordinate, every covariance
 pair and the error policy. It retains cross-stream and cross-element covariance and independently audits the

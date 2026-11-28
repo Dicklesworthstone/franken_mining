@@ -365,6 +365,12 @@ The output preserves original observation tokens, canonical model binding, exact
 full first-order covariance and the parent-linked nominal transfer. It does not automatically adopt
 that approximate covariance as a Gaussian reconciliation error model.
 
+The optional dry-mass bridge (DESIGN, BD-155) requires a common planning moisture fraction and
+an independent reference wet weight with identical physical support for every lot. It reports
+the exact signed change from applying each measured lot moisture, followed by the signed
+change from substituting each reference wet weight. The source-bound reference values are
+declared inputs. The bridge leaves the nominal transfer and its first-order covariance separate.
+
 ### 17. Explicitly unmeasured flows (DESIGN; BD-149/175/177)
 
 `flowsheet::reconciliation::unmeasured::reconcile_unmeasured_flowsheet` accepts the original graph

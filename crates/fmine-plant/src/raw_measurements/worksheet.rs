@@ -11,7 +11,7 @@ use fmine_claim::{
 use fmine_core::{Digest32, anchor::SourceAnchor, hash::sha256};
 use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, Refusal, RefusalCode};
 use fmine_numerics::reconciliation::MAX_OBSERVATIONS;
-use fmine_registry::toml_subset::{TomlField, TomlValue, parse_subset};
+use fmine_registry::toml_subset::{TomlField, TomlRow, TomlValue, parse_subset};
 use fmine_time::ValidTime;
 use fmine_units::ExactQty;
 
@@ -29,6 +29,7 @@ pub const MAX_BYTES: u64 = 1024 * 1024;
 const SCHEMA: &str = "fmine.plant-transfer.v1";
 const MOISTURE_BASIS: &str = "water_over_wet_mass";
 const ASSAY_BASIS: &str = "total_element/all_non_water_dry_matter";
+const BRIDGE_SCOPE: &str = "Exact sequential comparison on the submitted lots. Replace planning moisture first, then replace the reported wet weight with its declared independent same-support reference. The wet-weight effect uses measured moisture. Reference provenance and independence are user declarations. The bridge is conditional and carries no causal attribution, reference-scale calibration or uncertainty estimate.";
 pub const NO_CLAIM: &str = "Conditional raw-lot projection: exact nominal products and ratios, separately declared first-order covariance. Sources, support and error model remain Assumed, Internal and uncalibrated. No transformed Gaussian law, nonlinear confidence interval, sampling coverage, recovery estimate, reconciliation, P754 qualification or operating authorization is supplied.";
 
 pub const ROBOT_DOCS_JSON: &str = concat!(
@@ -44,6 +45,7 @@ pub const ROBOT_DOCS_JSON: &str = concat!(
     "\"support\":\"whole_lot_support=true required; measurements are PlantLot Claims; every observation of a lot has identical physical support within the full reporting interval\",",
     "\"quantities\":\"Nominal values are exact plain decimals or n/d; uncertainties and correlations are finite binary64 parameters; nonzero underflow refuses; all raw numeric tokens are retained\",",
     "\"correlations\":\"[[correlation]] left,right,value; keys are <lot>/<channel>; ALL unordered pairs including diagonal ones and zero cross terms are explicit; unit diagonal, symmetric, positive-definite full raw correlation\",",
+    "\"dry_mass_bridge\":\"Optional planning_moisture in the declared wet-basis fraction, reference_scale_independent=true and one [[scale_reference]] lot,wet_kg,start_ns,end_ns,source per lot. The source is a declared locator and the times must match its wet-weight and moisture observations. Reports planning dry kg, dry kg at measured lot moisture, and dry kg at the reference wet weight, with both effects separated.\",",
     "\"approximation\":\"first_order_approximation_accepted=true is mandatory; covariance does not establish a Gaussian output law, coverage or a WLS model\",",
     "\"limits\":\"128 raw measured coordinates; nonnegative standard uncertainties including explicit zeros\",",
     "\"output\":\"Original tokens, source Claims and raw model; exact extensive kg and ratios of summed metal to summed dry matter; canonical covariance order, full first-order kg2 covariance, receipt and parent-linked nominal transfer Claim\",",
@@ -274,6 +276,154 @@ struct Worksheet {
     first_order: bool,
     raw_start: String,
     raw_end: String,
+    dry_mass_bridge: Option<String>,
+}
+
+fn dry_mass_bridge(
+    top: &Fields<'_>,
+    rows: &[TomlRow],
+    lots: &BTreeMap<String, usize>,
+    observations: &[Observation],
+    positions: &BTreeMap<String, usize>,
+) -> Result<Option<String>, Refusal> {
+    let references: Vec<_> = rows
+        .iter()
+        .filter(|row| row.table == "scale_reference")
+        .collect();
+    let planning = top.get("planning_moisture").copied();
+    let independent = top.get("reference_scale_independent").copied();
+    if planning.is_none() && independent.is_none() && references.is_empty() {
+        return Ok(None);
+    }
+    let unidentified = |why| Refusal::new(RefusalCode::NonIdentifiableAttribution104, why);
+    let planning =
+        planning.ok_or_else(|| unidentified("declare the baseline planning moisture"))?;
+    let independent =
+        independent.ok_or_else(|| unidentified("declare independent reference weights"))?;
+    if !boolean(independent)? {
+        return Err(unidentified("reference_scale_independent must be true"));
+    }
+    let planning_moisture = quantity(planning)?;
+    let zero = ExactQty::from_integer(0);
+    let one = ExactQty::from_integer(1);
+    let arithmetic = |_| {
+        Refusal::new(
+            RefusalCode::NumericalCertificateFailed207,
+            "dry-mass bridge exceeds exact arithmetic range",
+        )
+    };
+    let moisture_factor = |moisture: ExactQty| {
+        if moisture.signum() < 0 || !moisture.checked_cmp(one).map_err(arithmetic)?.is_lt() {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                "dry-mass bridge moisture fractions must lie in [0, 1)",
+            ));
+        }
+        one.checked_sub(moisture).map_err(arithmetic)
+    };
+    let planning_factor = moisture_factor(planning_moisture)?;
+    let mut by_lot = BTreeMap::new();
+    for row in references {
+        let f = fields(
+            &row.fields,
+            &["lot", "wet_kg", "start_ns", "end_ns", "source"],
+            &[],
+            row.line,
+        )?;
+        let lot = get(&f, "lot")?.0;
+        if !lots.contains_key(lot) || by_lot.insert(lot, (f, row.line)).is_some() {
+            return Err(bad(
+                row.line,
+                "reference weight must name a unique declared lot",
+            ));
+        }
+    }
+    let stages_json = |[planned, measured, reference]: [ExactQty; 3]| -> Result<String, Refusal> {
+        Ok(format!(
+            "\"planning_dry_kg\":{},\"measured_moisture_dry_kg\":{},\"reference_dry_kg\":{},\"moisture_effect_kg\":{},\"wet_weight_effect_kg\":{},\"net_effect_kg\":{}",
+            exact(planned),
+            exact(measured),
+            exact(reference),
+            exact(measured.checked_sub(planned).map_err(arithmetic)?),
+            exact(reference.checked_sub(measured).map_err(arithmetic)?),
+            exact(reference.checked_sub(planned).map_err(arithmetic)?),
+        ))
+    };
+    let mut rendered = Vec::with_capacity(lots.len());
+    let mut total = [zero; 3];
+    for lot in lots.keys() {
+        let (f, line) = by_lot.get(lot.as_str()).ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::NonIdentifiableAttribution104,
+                format!("lot {lot} is missing its independent reference wet weight"),
+            )
+        })?;
+        let get_observation = |channel| {
+            positions
+                .get(&format!("{lot}/{channel}"))
+                .and_then(|&idx| observations.get(idx))
+                .ok_or_else(|| {
+                    Refusal::new(
+                        RefusalCode::NonIdentifiableAttribution104,
+                        format!("lot {lot} is missing its {channel} observation"),
+                    )
+                })
+        };
+        let measured = &get_observation("wet_mass")?.claim.value;
+        let moisture = &get_observation("moisture")?.claim.value;
+        let interval = ValidTime {
+            start_ns: integer(get(f, "start_ns")?)?,
+            end_ns: integer(get(f, "end_ns")?)?,
+        };
+        if interval != measured.physical_time || interval != moisture.physical_time {
+            return Err(Refusal::new(
+                RefusalCode::BasisMismatch105,
+                format!("lot {lot} reference, wet weight and moisture require identical support"),
+            ));
+        }
+        let (
+            RawTransferValue::WetMass { kg, .. },
+            RawTransferValue::Moisture {
+                wet_mass_fraction, ..
+            },
+        ) = (&measured.value, &moisture.value)
+        else {
+            return Err(unidentified(
+                "expected paired wet mass and moisture measurements",
+            ));
+        };
+        let raw_reference = get(f, "wet_kg")?;
+        let reference = quantity(raw_reference)?;
+        if reference.signum() <= 0 || kg.signum() <= 0 {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                format!("lot {lot} requires positive reported and reference wet weights"),
+            ));
+        }
+        let measured_factor = moisture_factor(*wet_mass_fraction)?;
+        let stages = [
+            kg.checked_mul(planning_factor).map_err(arithmetic)?,
+            kg.checked_mul(measured_factor).map_err(arithmetic)?,
+            reference.checked_mul(measured_factor).map_err(arithmetic)?,
+        ];
+        for (sum, value) in total.iter_mut().zip(stages) {
+            *sum = sum.checked_add(value).map_err(arithmetic)?;
+        }
+        rendered.push(format!(
+            "{{\"lot\":{},\"start_ns\":\"{}\",\"end_ns\":\"{}\",\"reported_wet_kg\":{},\"measured_moisture\":{},\"reference_wet_kg\":{},\"reference_wet_kg_raw\":{},\"reference_source\":{},\"reference_line\":{line},{}}}",
+            quoted(lot), interval.start_ns, interval.end_ns, exact(*kg),
+            exact(*wet_mass_fraction), exact(reference), quoted(raw_reference.0),
+            quoted(get(f, "source")?.0), stages_json(stages)?,
+        ));
+    }
+    Ok(Some(format!(
+        "{{\"planning_moisture\":{},\"planning_moisture_raw\":{},\"lots\":[{}],\"total\":{{{}}},\"scope\":{}}}",
+        exact(planning_moisture),
+        quoted(planning.0),
+        rendered.join(","),
+        stages_json(total)?,
+        quoted(BRIDGE_SCOPE),
+    )))
 }
 
 fn boolean(value: (&str, usize)) -> Result<bool, Refusal> {
@@ -341,7 +491,7 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
             "first_order_approximation_accepted",
             "error_model_basis",
         ],
-        &[],
+        &["planning_moisture", "reference_scale_independent"],
         1,
     )?;
     if get(&top, "schema")?.0 != SCHEMA {
@@ -392,7 +542,7 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
                     return Err(bad(row.line, "duplicate declared elemental identity"));
                 }
             }
-            "measurement" | "correlation" => {}
+            "measurement" | "correlation" | "scale_reference" => {}
             _ => return Err(bad(row.line, format!("unsupported table {}", row.table))),
         }
     }
@@ -512,6 +662,7 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
             raw_value: raw_value.0.into(), unit, raw_start: start.0.into(), raw_end: end.0.into(),
             raw_uncertainty: raw_uncertainty.0.into(), uncertainty, line: row.line });
     }
+    let dry_mass_bridge = dry_mass_bridge(&top, &document.rows, &lots, &observations, &positions)?;
     let n = observations.len();
     let mut correlation = vec![None; n * n];
     let mut correlations = Vec::new();
@@ -547,7 +698,7 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
         correlation: correlation.into_iter().map(|v| v.ok_or_else(|| bad(1, "every unordered raw correlation pair is required, including diagonal ones and zero cross terms"))).collect::<Result<_, _>>()?,
         model_basis: get(&top, "error_model_basis")?.0.into(), model_line: get(&top, "error_model_basis")?.1,
         first_order: boolean(get(&top, "first_order_approximation_accepted")?)?,
-        raw_start: start.0.into(), raw_end: end.0.into() })
+        raw_start: start.0.into(), raw_end: end.0.into(), dry_mass_bridge })
 }
 
 fn model(
@@ -883,10 +1034,14 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult, Re
         quoted(MOISTURE_BASIS),
         quoted(ASSAY_BASIS)
     );
+    let bridge = match (&refusal, &worksheet.dry_mass_bridge) {
+        (None, Some(bridge)) => format!(",\"dry_mass_bridge\":{bridge}"),
+        _ => String::new(),
+    };
     let json = format!(
         concat!(
             "{{\"schema\":\"fmine.plant-transfer-result.v1\",\"mode\":\"exact_nominal_and_first_order_covariance\",\"source\":{source_json},\"scope\":{scope},",
-            "\"declaration\":{},\"observations\":[{}],\"error_model\":{},\"admitted_claim\":{admitted},\"nominal_transfer\":{transfer},\"receipt_digest\":{digest},\"result\":{result}}}"
+            "\"declaration\":{},\"observations\":[{}],\"error_model\":{},\"admitted_claim\":{admitted},\"nominal_transfer\":{transfer},\"receipt_digest\":{digest},\"result\":{result}{bridge}}}"
         ),
         declaration_json(&worksheet),
         worksheet
@@ -901,7 +1056,8 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult, Re
         admitted = admitted,
         transfer = transfer,
         digest = digest,
-        result = result
+        result = result,
+        bridge = bridge,
     );
     Ok(WorksheetResult { json, refusal })
 }
