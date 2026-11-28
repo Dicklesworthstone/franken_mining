@@ -20,11 +20,15 @@
 //! Every set is checked for conservation (PO-CORE-2). Σ weight × value over the composites, the dropped ones
 //! included, must equal the same sum over the in-domain part of the inputs, computed separately from the
 //! input-to-domain join, to 1e-12 relative. Otherwise the set is refused (`FMINE-REF-101`).
+//!
+//! [`sample_inputs`] builds one hole's inputs from its logged intervals, its samples and their results.
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use fmine_claim::{AdditivityClass, SpatialSupport};
 
 use crate::join::{Span, overlaps, self_overlaps};
-use crate::records::{AssayValue, DrillError};
+use crate::records::{AssayResult, AssayValue, DrillError, Interval, Sample};
 
 /// Largest relative difference allowed between the input and composite totals (PO-CORE-2).
 pub const CONSERVATION_TOLERANCE: f64 = 1e-12;
@@ -306,6 +310,121 @@ fn relative(a: f64, b: f64) -> f64 {
     } else {
         (a - b).abs() / scale
     }
+}
+
+/// One hole's inputs for `analyte`, from the hole's logged intervals, its samples and their results.
+///
+/// A sample taken from core gives one input: its span runs from the top of its first interval to the bottom of its
+/// last, its value is the bounds of its one result for `analyte` ([`Bounds::of`], so a censored result stays a pair
+/// of bounds), and its mass is its dry mass. A sample with no result for `analyte` gives none: that core is
+/// unsampled, not zero. Inserted QC material, taken from no interval, gives none either, and results for other
+/// analytes are ignored. The inputs come in depth order.
+///
+/// # Errors
+/// [`DrillError::Invalid`] for a sample taken from an interval that is not among `intervals` or is on another hole,
+/// or from intervals that leave a gap; a result for a sample not among `samples`; a sample with two results for
+/// `analyte` (a repeat or a re-assay, where the caller chooses the one that stands); and two samples of the same
+/// core (a field duplicate is QC, not an input).
+pub fn sample_inputs(
+    hole: &str,
+    intervals: &[Interval],
+    samples: &[Sample],
+    results: &[AssayResult],
+    analyte: &str,
+) -> Result<Vec<Input>, DrillError> {
+    let logged: BTreeMap<&str, &Interval> = intervals
+        .iter()
+        .map(|i| (i.interval_id.as_str(), i))
+        .collect();
+    let taken: BTreeSet<&str> = samples.iter().map(|s| s.sample_id.as_str()).collect();
+    let mut values: BTreeMap<&str, Bounds> = BTreeMap::new();
+    for r in results.iter().filter(|r| r.analyte == analyte) {
+        if !taken.contains(r.sample_id.as_str()) {
+            return Err(DrillError::invalid(
+                "composite.results",
+                format!(
+                    "result '{}' is for sample '{}', which is not among hole '{hole}''s samples",
+                    r.result_id, r.sample_id
+                ),
+            ));
+        }
+        if values
+            .insert(r.sample_id.as_str(), Bounds::of(&r.value))
+            .is_some()
+        {
+            return Err(DrillError::invalid(
+                "composite.results",
+                format!(
+                    "sample '{}' has two {analyte} results; choose the one that stands",
+                    r.sample_id
+                ),
+            ));
+        }
+    }
+    let mut out: Vec<(Span, &str, Input)> = Vec::with_capacity(values.len());
+    for s in samples.iter().filter(|s| !s.interval_ids.is_empty()) {
+        let mut spans = Vec::with_capacity(s.interval_ids.len());
+        for id in &s.interval_ids {
+            let Some(iv) = logged.get(id.as_str()) else {
+                return Err(DrillError::invalid(
+                    "composite.samples",
+                    format!(
+                        "sample '{}' is taken from interval '{id}', which is not among hole '{hole}''s intervals",
+                        s.sample_id
+                    ),
+                ));
+            };
+            if iv.hole_id != hole {
+                return Err(DrillError::invalid(
+                    "composite.samples",
+                    format!(
+                        "sample '{}' is taken from interval '{id}' on hole '{}', not '{hole}'",
+                        s.sample_id, iv.hole_id
+                    ),
+                ));
+            }
+            spans.push(Span::of(iv));
+        }
+        spans.sort_unstable();
+        if let Some(w) = spans.windows(2).find(|w| w[1].from_mm != w[0].to_mm) {
+            return Err(DrillError::invalid(
+                "composite.samples",
+                format!(
+                    "sample '{}' leaves {} to {} mm between its intervals; a sample is one run of core",
+                    s.sample_id, w[0].to_mm, w[1].from_mm
+                ),
+            ));
+        }
+        let Some(&value) = values.get(s.sample_id.as_str()) else {
+            continue;
+        };
+        let span = Span {
+            from_mm: spans[0].from_mm,
+            to_mm: spans[spans.len() - 1].to_mm,
+        };
+        out.push((
+            span,
+            s.sample_id.as_str(),
+            Input {
+                span,
+                value,
+                mass_kg: s.mass_g.map(|g| g / 1000.0),
+            },
+        ));
+    }
+    out.sort_by_key(|&(span, id, _)| (span, id));
+    let spans: Vec<Span> = out.iter().map(|&(span, _, _)| span).collect();
+    if let Some(o) = self_overlaps(&spans)?.first() {
+        return Err(DrillError::invalid(
+            "composite.samples",
+            format!(
+                "samples '{}' and '{}' both cover {} to {} mm; one value per core (a field duplicate is QC, not \
+                 an input)",
+                out[o.left].1, out[o.right].1, o.span.from_mm, o.span.to_mm
+            ),
+        ));
+    }
+    Ok(out.into_iter().map(|(_, _, input)| input).collect())
 }
 
 /// Composite `inputs` along one hole within `domains` under `rule`.
