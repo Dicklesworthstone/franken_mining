@@ -1340,11 +1340,12 @@ fn test_a_text_index_past_its_limit_is_withheld_and_the_rest_goes_on() {
     );
 }
 
-/// Two versions of one interval in one batch, which a ledger committed without `drill_law` can hold: the store
-/// applies them in order. The interval is added on one hole and relogged onto another with new text; it ends with
-/// the second version's row, box and text, two versions, and (indexes kept current) the first text as garbage.
+/// Two versions of a record in one batch, which a ledger committed without `drill_law` can hold: the store applies
+/// them in order. An interval is added on one hole and relogged onto another with new text; it ends with the second
+/// version's row, box and text, two versions, and (indexes kept current) the first text as garbage. A survey is
+/// added on hole 0 and moved to hole 1, so both holes' traces change.
 #[test]
-fn test_two_versions_of_an_interval_in_one_batch_apply_in_order() {
+fn test_two_versions_of_a_record_in_one_batch_apply_in_order() {
     let mut rng = Rng(9);
     let mut ledger = L0Ledger::new();
     let lease = ledger.create_cell(CELL, "node-1").unwrap();
@@ -1388,39 +1389,57 @@ fn test_two_versions_of_an_interval_in_one_batch_apply_in_order() {
         ..interval(3, 1, &mut rng)
     };
     assert_eq!(v1.interval_id, v2.interval_id);
-    let key = record_key(RecordKind::Interval, &v1.interval_id);
     let reason = "relogged in the same batch";
-    let ops = vec![
-        DeltaOp::new(
+    let station = Survey {
+        depth_mm: 25_000 * STATIONS as u64,
+        ..survey(0, STATIONS, &mut rng)
+    };
+    let moved = Survey {
+        survey_id: station.survey_id.clone(),
+        depth_mm: 25_000 * STATIONS as u64,
+        ..survey(1, STATIONS, &mut rng)
+    };
+    let pairs = [
+        (DrillRecord::Interval(v1), DrillRecord::Interval(v2)),
+        (DrillRecord::Survey(station), DrillRecord::Survey(moved)),
+    ];
+    let mut ops = Vec::new();
+    for (first, second) in &pairs {
+        let key = record_key(first.kind(), first.id());
+        ops.push(DeltaOp::new(
             key.clone(),
             DeltaKind::Supersede,
-            fmine_drill::records::encode_version(&DrillRecord::Interval(v2.clone()), Some(reason))
-                .unwrap(),
-        ),
-        DeltaOp::new(
-            key.clone(),
+            fmine_drill::records::encode_version(second, Some(reason)).unwrap(),
+        ));
+        ops.push(DeltaOp::new(
+            key,
             DeltaKind::Put,
-            fmine_drill::records::encode_version(&DrillRecord::Interval(v1), None).unwrap(),
-        ),
-    ];
+            fmine_drill::records::encode_version(first, None).unwrap(),
+        ));
+    }
     let batch = fmine_drill::store::batch_for(&ledger, CELL, lease.epoch, ops).unwrap();
-    assert_eq!(
-        batch.deltas[0].kind,
-        DeltaKind::Put,
-        "the put applies first"
-    );
+    for pair in batch.deltas.chunks(2) {
+        assert_eq!(pair[0].key, pair[1].key);
+        assert_eq!(
+            (pair[0].kind, pair[1].kind),
+            (DeltaKind::Put, DeltaKind::Supersede),
+            "the put applies first"
+        );
+    }
     ledger.commit(&lease, batch).unwrap();
-    held.insert(
-        key,
-        Held {
-            version: RecordVersion {
-                record: DrillRecord::Interval(v2),
-                correction: Some(reason.to_string()),
+    for (_, second) in pairs {
+        held.insert(
+            record_key(second.kind(), second.id()),
+            Held {
+                version: RecordVersion {
+                    record: second,
+                    correction: Some(reason.to_string()),
+                },
+                versions: 2,
+                seq: 1,
             },
-            versions: 2,
-            seq: 1,
-        },
-    );
+        );
+    }
     let want = expected(&held);
     assert_eq!(want.intervals.len(), 1);
     assert!(want.intervals[0].located.is_some(), "hole 1 has a trace");

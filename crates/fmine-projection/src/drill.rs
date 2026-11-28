@@ -71,6 +71,8 @@ pub const RTREE_ROWS_PER_STATEMENT: usize = 4096;
 const TEXT_ROWS_PER_STATEMENT: usize = 512;
 /// The most new interval rows one insert writes (sixteen parameters each; fsqlite takes up to 32,766).
 const INTERVAL_ROWS_PER_STATEMENT: usize = 256;
+/// The most new record rows one insert writes (eight parameters each).
+const RECORD_ROWS_PER_STATEMENT: usize = 512;
 /// The most intervals the store keeps a text index for, by default (module documentation).
 pub const TEXT_INDEX_MAX_ROWS: u64 = 100_000;
 /// The most rows one statement of a text-index load writes: a failed statement is undone document by document.
@@ -399,6 +401,16 @@ struct Span {
     to_mm: u64,
     /// `None` for an interval new in this batch.
     prior: Option<Prior>,
+}
+
+/// A drill record new in this batch, inserted with the batch's other new records before any is read back.
+struct NewRecord<'a> {
+    kind: &'static str,
+    record_id: &'a str,
+    hole_id: Option<String>,
+    versions: i64,
+    seq: i64,
+    payload: &'a [u8],
 }
 
 /// An interval new in this batch. Its row is written once, with its box, after the batch's traces are known.
@@ -1073,18 +1085,27 @@ impl DrillStore {
         payload.map(|p| decode(key, &p)).transpose()
     }
 
-    /// Write `key`'s new current version; returns the hole its previous version was on, if it had one.
+    /// Write `key`'s new current version: supersede it in place if the store holds it, change it in `fresh` if this
+    /// batch added it, and otherwise add it to `fresh`, whose rows [`DrillStore::write_new_records`] inserts. Returns
+    /// the hole its previous version was on, if it had one.
     #[allow(clippy::too_many_arguments)]
-    fn upsert_record(
+    fn upsert_record<'a>(
         &self,
         cell: &str,
-        key: &str,
+        key: &'a str,
         kind: RecordKind,
-        id: &str,
+        id: &'a str,
         hole: Option<&str>,
         seq: i64,
-        payload: &[u8],
+        payload: &'a [u8],
+        fresh: &mut BTreeMap<&'a str, NewRecord<'a>>,
     ) -> Result<Option<String>, DrillStoreError> {
+        if let Some(new) = fresh.get_mut(key) {
+            let prior_hole = std::mem::replace(&mut new.hole_id, hole.map(str::to_string));
+            new.versions += 1;
+            (new.seq, new.payload) = (seq, payload);
+            return Ok(prior_hole);
+        }
         let prior = optional(
             self.conn
                 .prepare_cached(
@@ -1097,21 +1118,63 @@ impl DrillStore {
                 }),
         )
         .map_err(sql("read a record's versions"))?;
-        match &prior {
-            None => self.exec_cached(
-                "insert a record",
-                "INSERT INTO drill_record(cell_id, key, kind, record_id, hole_id, versions, seq, payload) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7)",
-                params![cell, key, kind.code(), id, hole, seq, payload],
-            )?,
-            Some((versions, _)) => self.exec_cached(
-                "supersede a record",
-                "UPDATE drill_record SET hole_id = ?1, versions = ?2, seq = ?3, payload = ?4 \
-                 WHERE cell_id = ?5 AND key = ?6",
-                params![hole, versions + 1, seq, payload, cell, key],
-            )?,
+        let Some((versions, prior_hole)) = prior else {
+            fresh.insert(
+                key,
+                NewRecord {
+                    kind: kind.code(),
+                    record_id: id,
+                    hole_id: hole.map(str::to_string),
+                    versions: 1,
+                    seq,
+                    payload,
+                },
+            );
+            return Ok(None);
         };
-        Ok(prior.and_then(|(_, h)| h))
+        self.exec_cached(
+            "supersede a record",
+            "UPDATE drill_record SET hole_id = ?1, versions = ?2, seq = ?3, payload = ?4 \
+             WHERE cell_id = ?5 AND key = ?6",
+            params![hole, versions + 1, seq, payload, cell, key],
+        )?;
+        Ok(prior_hole)
+    }
+
+    /// Insert the records new in this batch, a few statements at a time.
+    fn write_new_records(
+        &self,
+        cell: &str,
+        fresh: &BTreeMap<&str, NewRecord<'_>>,
+    ) -> Result<(), DrillStoreError> {
+        const COLUMNS: usize = 8;
+        let rows: Vec<(&&str, &NewRecord<'_>)> = fresh.iter().collect();
+        for chunk in rows.chunks(RECORD_ROWS_PER_STATEMENT) {
+            let mut text = String::from(
+                "INSERT INTO drill_record(cell_id, key, kind, record_id, hole_id, versions, seq, payload) VALUES ",
+            );
+            let mut args: Vec<&dyn ToSql> = Vec::with_capacity(chunk.len() * COLUMNS);
+            for (i, (key, new)) in chunk.iter().enumerate() {
+                text.push_str(if i == 0 { "(" } else { ", (" });
+                for k in 0..COLUMNS {
+                    let sep = if k == 0 { "" } else { ", " };
+                    let _ = write!(text, "{sep}?{}", i * COLUMNS + k + 1);
+                }
+                text.push(')');
+                args.extend([
+                    &cell as &dyn ToSql,
+                    *key,
+                    &new.kind,
+                    &new.record_id,
+                    &new.hole_id,
+                    &new.versions,
+                    &new.seq,
+                    &new.payload,
+                ]);
+            }
+            self.exec_cached("insert new records", &text, args.as_slice())?;
+        }
+        Ok(())
     }
 
     /// Write `iv`'s row (not its box).
@@ -1260,6 +1323,7 @@ impl DrillStore {
         let mut dirty_holes = BTreeSet::new();
         let mut spans: BTreeMap<i64, Span> = BTreeMap::new();
         let mut fresh: BTreeMap<String, NewInterval> = BTreeMap::new();
+        let mut fresh_records: BTreeMap<&str, NewRecord<'_>> = BTreeMap::new();
         let mut texts: Vec<(i64, String)> = Vec::new();
         for op in &batch.deltas {
             if !op.key.starts_with(KEY_PREFIX) {
@@ -1288,8 +1352,16 @@ impl DrillStore {
                     error: format!("the payload is {} '{}'", record.kind().code(), record.id()),
                 });
             }
-            let prior_hole =
-                self.upsert_record(cell, &op.key, kind, id, hole_of(record), seq, &op.payload)?;
+            let prior_hole = self.upsert_record(
+                cell,
+                &op.key,
+                kind,
+                id,
+                hole_of(record),
+                seq,
+                &op.payload,
+                &mut fresh_records,
+            )?;
             match record {
                 DrillRecord::Collar(c) => {
                     let crs = c
@@ -1326,6 +1398,8 @@ impl DrillStore {
                 _ => {}
             }
         }
+        // Before anything reads a record back: the traces below read collars and surveys.
+        self.write_new_records(cell, &fresh_records)?;
         for hole in &dirty_holes {
             for (rid, from_mm, to_mm, prior) in self.hole_intervals(cell, hole)? {
                 spans.entry(rid).or_insert(Span {
