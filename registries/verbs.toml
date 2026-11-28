@@ -432,7 +432,13 @@ description = "Emit machine-readable documentation for all CLI verbs, exit codes
 path = "recon run"
 subsystem = "Touchstone"
 mutates_authority = false
-description = "Compare a matched material cohort's planned and actual tonnes, grade and contained metal and flag compensating variances"
+description = "Run matched-cohort reconciliation screening or Touchstone posterior balance, bias, and identifiability analysis without mutating authority"
+
+[[verb]]
+path = "recon close"
+subsystem = "Touchstone"
+mutates_authority = true
+description = "Seal an attested Touchstone ReconciliationCertificate and offline-verifiable FMT-CERT-1 after enforcing INV-005 gross-error and G-TOUCH-4 guards"
 
 [[verb]]
 path = "plant balance"
@@ -613,6 +619,12 @@ path = "drill censored"
 subsystem = "Corebox"
 mutates_authority = false
 description = "Compare lognormal MLE and ROS fits of source-bound left-censored assays without replacing raw observations, retaining method failures and model limitations"
+
+[[verb]]
+path = "drill verify-index"
+subsystem = "Corebox"
+mutates_authority = false
+description = "Render a non-classifying technical-report data-verification evidence index skeleton per item with CAS original links, QA/QC performance, and explicit verification gaps"
 
 [[verb]]
 path = "metrics roce"

@@ -13,6 +13,7 @@ pub mod drill_censored;
 pub mod drill_monitor;
 pub mod drill_qaqc;
 pub mod drill_quality;
+pub mod drill_verify_index;
 mod forecast;
 pub mod geo;
 mod guidance;
@@ -88,6 +89,8 @@ pub enum CliCommand {
     DrillQuality(drill_quality::Command),
     DrillMonitor(drill_monitor::Command),
     DrillCensored(drill_censored::Command),
+    /// Render a non-classifying technical-report data-verification evidence index skeleton.
+    DrillVerifyIndex(drill_verify_index::Command),
     /// Calculate a declared complete cost population under an explicitly selected AISC/AIC definition.
     MetricsCost(cost::Command),
     /// Compare unchanged production quantities under explicit named and versioned price decks.
@@ -112,8 +115,10 @@ pub enum CliCommand {
     PlanOmf(schedule::omf::Command),
     /// Account or reconcile declared elemental inventory with original observations retained.
     Plant(plant::Command),
-    /// Compare planned and observed dry tonnes, grade and contained metal on matched material.
+    /// Compare planned and observed dry tonnes, grade and contained metal on matched material, or run posterior reconciliation.
     ReconRun(PathBuf),
+    /// Seal an attested Touchstone ReconciliationCertificate and offline-verifiable FMT-CERT-1.
+    ReconClose(recon::CloseCommand),
     /// Project exact registered HTML cells with source-verified semantic labels into canonical Claims.
     HtmlClaims(html::Command),
     /// Compute complete registered reserve-replacement windows from explicitly selected PDF assertions.
@@ -669,13 +674,25 @@ fn verb_hint(args: &[String]) -> &'static str {
                         "duplicates" => return drill_quality::DUPLICATES_VERB,
                         "monitor" => return drill_monitor::VERB,
                         "censored" => return drill_censored::VERB,
+                        "verify-index" => return drill_verify_index::VERB,
                         _ => return drill::VERB,
                     }
                 }
                 return drill::VERB;
             }
             "plant" => return "plant",
-            "recon" => return "recon run",
+            "recon" => {
+                let mut next = i + 1;
+                while let Some(word) = args.get(next) {
+                    match word.as_str() {
+                        "--format" | "--workspace" => next += 2,
+                        "--json" => next += 1,
+                        "close" => return recon::CLOSE_VERB,
+                        _ => return "recon run",
+                    }
+                }
+                return "recon run";
+            }
             "html" => return "html claims",
             "mirror" => return "mirror",
             "reserve" => return "reserve replacement",
@@ -1297,6 +1314,7 @@ pub fn parse_args(
             | drill_quality::DUPLICATES_VERB
             | drill_monitor::VERB
             | drill_censored::VERB
+            | drill_verify_index::VERB
             | "forecast spatial-monitor"
             | "decide production"
             | "decide investment"
@@ -1314,6 +1332,7 @@ pub fn parse_args(
             | "html claims"
             | "plant"
             | "recon run"
+            | recon::CLOSE_VERB
             | "doctor"
             | "robot schema"
             | "robot"
@@ -1342,6 +1361,9 @@ pub fn parse_args(
             )?),
             drill_monitor::VERB => CliCommand::DrillMonitor(drill_monitor::parse(&words)?),
             drill_censored::VERB => CliCommand::DrillCensored(drill_censored::parse(&words)?),
+            drill_verify_index::VERB => {
+                CliCommand::DrillVerifyIndex(drill_verify_index::parse(&words)?)
+            }
             "forecast spatial-monitor" => spatial::parse(&words)?,
             "decide production" => {
                 CliCommand::DecideProduction(decision::production::parse(&words)?)
@@ -1430,6 +1452,7 @@ pub fn parse_args(
                 }
                 _ => return Err(recon::USAGE.to_owned()),
             },
+            recon::CLOSE_VERB => CliCommand::ReconClose(recon::parse_close(&words)?),
             "doctor" => {
                 let parsed = doctor::parse(&words)?;
                 if parsed.is_default() {
@@ -2455,6 +2478,9 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         CliCommand::DrillQuality(command) => drill_quality::execute(command, workspace_root),
         CliCommand::DrillMonitor(command) => drill_monitor::execute(command, workspace_root),
         CliCommand::DrillCensored(command) => drill_censored::execute(command, workspace_root),
+        CliCommand::DrillVerifyIndex(command) => {
+            drill_verify_index::execute(command, workspace_root)
+        }
         CliCommand::MetricsCost(command) => cost::execute(command, workspace_root),
         CliCommand::MetricsGeo(command) => geo::execute(command, workspace_root),
         CliCommand::MetricsWaterfall(command) => waterfall::execute(command, workspace_root),
@@ -2470,6 +2496,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         CliCommand::PlanOmf(command) => schedule::omf::execute(command, workspace_root),
         CliCommand::Plant(command) => plant::execute(command, workspace_root),
         CliCommand::ReconRun(path) => recon::execute(path, workspace_root),
+        CliCommand::ReconClose(command) => recon::execute_close(command, workspace_root),
         CliCommand::HtmlClaims(command) => html::execute(command, workspace_root),
         CliCommand::ReserveReplacement(command) => reserve::execute(command, workspace_root),
         CliCommand::DecideCard { model } => {
@@ -2855,6 +2882,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 plant::BALANCE_USAGE,
                 plant::TWO_PRODUCT_USAGE,
                 recon::USAGE,
+                recon::CLOSE_USAGE,
                 plant::RECONCILE_USAGE,
                 plant::RAW_BALANCE_USAGE,
                 plant::PROJECT_USAGE,
@@ -2941,6 +2969,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 drill_quality::DUPLICATES_USAGE,
                 drill_monitor::USAGE,
                 drill_censored::USAGE,
+                drill_verify_index::USAGE,
                 "forecast journal report --journal <path> --assessment <digest> [--head <hex>] [--provenance <path>] [--timestamp-head <hex> --timestamp-receipt <path> --timestamp-roots <pem> [--timestamp-intermediates <pem>]]",
                 doctor::USAGE,
                 repair::PLAN_USAGE,
@@ -3086,6 +3115,10 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(drill_monitor::ROBOT_DOCS_JSON);
             payload.push_str(",\"drill_censored\":");
             payload.push_str(drill_censored::ROBOT_DOCS_JSON);
+            payload.push_str(",\"drill_verify_index\":");
+            payload.push_str(drill_verify_index::ROBOT_DOCS_JSON);
+            payload.push_str(",\"recon\":");
+            payload.push_str(recon::ROBOT_DOCS_JSON);
             payload.push_str(",\"forecast_cusum_monitor\":");
             payload.push_str(forecast::CUSUM_MONITOR_JSON);
             payload.push_str(",\"forecast_event_log\":");

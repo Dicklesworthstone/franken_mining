@@ -20,6 +20,7 @@ fmine-sync = { path = "../fmine-sync" }
 
 [dev-dependencies]
 fmine-calib = { path = "../fmine-calib" }
+fmine-cli = { path = "../fmine-cli" }
 fmine-flow = { path = "../fmine-flow" }
 fmine-gen = { path = "../fmine-gen" }
 fmine-lab = { path = "../fmine-lab" }

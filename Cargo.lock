@@ -703,6 +703,7 @@ dependencies = [
  "fmine-plant",
  "fmine-public",
  "fmine-qaqc",
+ "fmine-recon",
  "fmine-registry",
  "fmine-runtime",
  "fmine-time",
@@ -1085,6 +1086,7 @@ name = "fmine-verify"
 version = "0.1.0"
 dependencies = [
  "fmine-calib",
+ "fmine-cli",
  "fmine-core",
  "fmine-evidence",
  "fmine-flow",

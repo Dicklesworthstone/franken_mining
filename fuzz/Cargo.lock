@@ -110,6 +110,7 @@ dependencies = [
  "fmine-plant",
  "fmine-public",
  "fmine-qaqc",
+ "fmine-recon",
  "fmine-registry",
  "fmine-runtime",
  "fmine-time",
@@ -333,6 +334,17 @@ dependencies = [
  "fmine-core",
  "fmine-drill",
  "fmine-evidence",
+ "fmine-numerics",
+]
+
+[[package]]
+name = "fmine-recon"
+version = "0.1.0"
+dependencies = [
+ "fmine-claim",
+ "fmine-core",
+ "fmine-evidence",
+ "fmine-flow",
  "fmine-numerics",
 ]
 

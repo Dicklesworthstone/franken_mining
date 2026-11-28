@@ -27,5 +27,6 @@ pub mod error;
 pub mod insertion;
 pub mod monitors;
 mod stats;
+pub mod verification_index;
 
 pub use error::QaqcError;

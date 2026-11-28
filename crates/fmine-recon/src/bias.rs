@@ -375,6 +375,31 @@ pub(crate) fn cholesky_lower_equilibrated(cov: &[f64], n: usize) -> Result<Vec<f
     Ok(lower)
 }
 
+fn checked_var_and_inv_var(sd: f64, context: &str) -> Result<(f64, f64), ReconError> {
+    let var = sd * sd;
+    if !(var.is_finite() && var > 0.0) {
+        return Err(ReconError::NumericalFailure {
+            detail: format!("{context} variance overflow/underflow (sd={sd})"),
+        });
+    }
+    let inv_v = 1.0 / var;
+    if !(inv_v.is_finite() && inv_v > 0.0) {
+        return Err(ReconError::NumericalFailure {
+            detail: format!("{context} precision overflow/underflow (sd={sd})"),
+        });
+    }
+    Ok((var, inv_v))
+}
+
+#[inline]
+fn canonical_bits(v: f64) -> u64 {
+    if v == 0.0 {
+        0.0_f64.to_bits()
+    } else {
+        v.to_bits()
+    }
+}
+
 /// Computes the exact joint hierarchical linear-Gaussian bias posterior across groups and nodes
 /// (`BD-152`, plan §20.5).
 pub fn fit_hierarchical_bias_posteriors(
@@ -444,10 +469,28 @@ pub fn fit_hierarchical_bias_posteriors(
         }
         match (&node.group_id, node.standalone_prior) {
             (Some(gid), None) => {
-                if !group_map.contains_key(gid) {
+                let Some(&g) = group_map.get(gid) else {
                     return Err(ReconError::invalid(
                         "bias.nodes",
                         format!("node '{}' references unknown group '{gid}'", node.node_id),
+                    ));
+                };
+                if node.target != g.target {
+                    return Err(ReconError::invalid(
+                        "bias.nodes",
+                        format!(
+                            "node '{}' target {:?} does not match pooling group '{gid}' target {:?}",
+                            node.node_id, node.target, g.target
+                        ),
+                    ));
+                }
+                if node.source != g.source && g.source != MiningSourceKind::Shared {
+                    return Err(ReconError::invalid(
+                        "bias.nodes",
+                        format!(
+                            "node '{}' source {:?} is incompatible with non-shared pooling group '{gid}' source {:?}",
+                            node.node_id, node.source, g.source
+                        ),
                     ));
                 }
                 *group_member_counts.entry(gid.as_str()).or_insert(0) += 1;
@@ -530,16 +573,18 @@ pub fn fit_hierarchical_bias_posteriors(
 
     for (g_i, gid) in group_ids.iter().enumerate() {
         let g = group_map[gid];
-        let inv_v = 1.0 / (g.hyper_sd * g.hyper_sd);
-        if !inv_v.is_finite() {
+        let (var_g, inv_v) =
+            checked_var_and_inv_var(g.hyper_sd, &format!("group '{gid}' hyper_sd"))?;
+        let rhs_term = inv_v * g.hyper_mean;
+        if !rhs_term.is_finite() {
             return Err(ReconError::NumericalFailure {
-                detail: format!("group '{gid}' hyper_sd precision overflow"),
+                detail: format!("group '{gid}' prior RHS overflow"),
             });
         }
         prior_prec[g_i * dim + g_i] += inv_v;
-        prior_rhs[g_i] += inv_v * g.hyper_mean;
+        prior_rhs[g_i] += rhs_term;
         prior_means[g_i] = g.hyper_mean;
-        prior_vars[g_i] = g.hyper_sd * g.hyper_sd;
+        prior_vars[g_i] = var_g;
     }
 
     for (k_i, nid) in node_ids.iter().enumerate() {
@@ -548,10 +593,14 @@ pub fn fit_hierarchical_bias_posteriors(
         if let Some(gid) = &node.group_id {
             let g_i = group_idx[gid.as_str()];
             let g = group_map[gid];
-            let inv_tau2 = 1.0 / (g.between_node_sd * g.between_node_sd);
-            if !inv_tau2.is_finite() {
+            let (tau_var, inv_tau2) = checked_var_and_inv_var(
+                g.between_node_sd,
+                &format!("group '{gid}' between_node_sd"),
+            )?;
+            let marginal_var = prior_vars[g_i] + tau_var;
+            if !(marginal_var.is_finite() && marginal_var > 0.0) {
                 return Err(ReconError::NumericalFailure {
-                    detail: format!("group '{gid}' between_node_sd precision overflow"),
+                    detail: format!("node '{nid}' marginal prior variance overflow"),
                 });
             }
             // (b_k - mu_g)^2 / tau_g^2
@@ -559,19 +608,28 @@ pub fn fit_hierarchical_bias_posteriors(
             prior_prec[g_i * dim + g_i] += inv_tau2;
             prior_prec[slot * dim + g_i] -= inv_tau2;
             prior_prec[g_i * dim + slot] -= inv_tau2;
-            prior_means[slot] = g.hyper_mean;
-            prior_vars[slot] = g.hyper_sd * g.hyper_sd + g.between_node_sd * g.between_node_sd;
-        } else if let Some(sp) = node.standalone_prior {
-            let inv_v = 1.0 / (sp.std_dev * sp.std_dev);
-            if !inv_v.is_finite() {
+            if !(prior_prec[slot * dim + slot].is_finite()
+                && prior_prec[g_i * dim + g_i].is_finite())
+            {
                 return Err(ReconError::NumericalFailure {
-                    detail: format!("node '{nid}' standalone_prior precision overflow"),
+                    detail: format!("node '{nid}' hierarchical prior precision overflow"),
+                });
+            }
+            prior_means[slot] = g.hyper_mean;
+            prior_vars[slot] = marginal_var;
+        } else if let Some(sp) = node.standalone_prior {
+            let (sp_var, inv_v) =
+                checked_var_and_inv_var(sp.std_dev, &format!("node '{nid}' standalone_prior"))?;
+            let rhs_term = inv_v * sp.mean;
+            if !rhs_term.is_finite() {
+                return Err(ReconError::NumericalFailure {
+                    detail: format!("node '{nid}' standalone prior RHS overflow"),
                 });
             }
             prior_prec[slot * dim + slot] += inv_v;
-            prior_rhs[slot] += inv_v * sp.mean;
+            prior_rhs[slot] += rhs_term;
             prior_means[slot] = sp.mean;
-            prior_vars[slot] = sp.std_dev * sp.std_dev;
+            prior_vars[slot] = sp_var;
         }
     }
 
@@ -641,21 +699,30 @@ pub fn fit_hierarchical_bias_posteriors(
                 format!("observation '{}' has all-zero net design row", obs.label),
             ));
         }
-        let inv_v = 1.0 / (obs.obs_sd * obs.obs_sd);
-        if !inv_v.is_finite() {
-            return Err(ReconError::NumericalFailure {
-                detail: format!("observation '{}' precision overflow", obs.label),
-            });
-        }
+        let (_, inv_v) =
+            checked_var_and_inv_var(obs.obs_sd, &format!("observation '{}'", obs.label))?;
         for i in 0..n_nodes {
             if row[i] != 0.0 {
                 node_obs_counts[i] += 1;
                 let si = n_groups + i;
                 post_rhs[si] += inv_v * row[i] * obs.observed;
+                if !post_rhs[si].is_finite() {
+                    return Err(ReconError::NumericalFailure {
+                        detail: format!("observation '{}' RHS accumulation overflow", obs.label),
+                    });
+                }
                 for j in 0..n_nodes {
                     if row[j] != 0.0 {
                         let sj = n_groups + j;
                         post_prec[si * dim + sj] += inv_v * row[i] * row[j];
+                        if !post_prec[si * dim + sj].is_finite() {
+                            return Err(ReconError::NumericalFailure {
+                                detail: format!(
+                                    "observation '{}' precision accumulation overflow",
+                                    obs.label
+                                ),
+                            });
+                        }
                     }
                 }
             }
@@ -777,10 +844,10 @@ pub fn fit_hierarchical_bias_posteriors(
         enc.put_str(n);
     }
     for &m in &joint_mean {
-        enc.put_u64(m.to_bits());
+        enc.put_u64(canonical_bits(m));
     }
     for &c in &joint_covariance {
-        enc.put_u64(c.to_bits());
+        enc.put_u64(canonical_bits(c));
     }
     let digest_hex = blake3_hash(&enc.finish()).to_hex();
 
@@ -824,9 +891,15 @@ pub fn sample_hierarchical_posterior(
         ));
     }
     let dim = result.joint_mean.len();
-    if dim == 0 || result.joint_covariance.len() != dim * dim {
+    if dim == 0
+        || result.joint_covariance.len() != dim * dim
+        || result.group_ids.len() + result.node_ids.len() != dim
+        || result.joint_mean.iter().any(|v| !v.is_finite())
+        || result.joint_covariance.iter().any(|v| !v.is_finite())
+    {
         return Err(ReconError::NumericalFailure {
-            detail: "hierarchical bias result has inconsistent joint dimensions".to_string(),
+            detail: "hierarchical bias result has inconsistent or non-finite joint parameters"
+                .to_string(),
         });
     }
     let lower = cholesky_lower_equilibrated(&result.joint_covariance, dim)?;

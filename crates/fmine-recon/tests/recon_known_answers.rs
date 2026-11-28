@@ -1773,3 +1773,178 @@ fn test_fresh_eyes_hardening_guards_and_large_lambda_power() {
         huge.global_power
     );
 }
+
+#[test]
+fn test_fresh_eyes_pass2_bias_identifiability_and_certificate_hardening() {
+    // 1. Huge obs_sd = 1e200 must refuse precision underflow rather than silently dropping the obs.
+    let huge_sd_err = fit_hierarchical_bias_posteriors(&HierarchicalBiasRequest {
+        evidence_cut_id: "cut-huge-sd".to_string(),
+        confidence_level: 0.90,
+        surprise_alarm_active: false,
+        groups: Vec::new(),
+        nodes: vec![NodeBiasSpec {
+            node_id: "n0".to_string(),
+            source: MiningSourceKind::Plant,
+            target: BiasTargetKind::MillSampler,
+            group_id: None,
+            standalone_prior: Some(StandaloneNodePrior {
+                mean: 0.0,
+                std_dev: 0.05,
+            }),
+            refclass_id: None,
+        }],
+        observations: vec![BiasObservation {
+            label: "underflow_obs".to_string(),
+            period_index: 0,
+            terms: vec![("n0".to_string(), 1.0)],
+            observed: 0.02,
+            obs_sd: 1.0e200,
+        }],
+    })
+    .expect_err("obs_sd = 1e200 must refuse rather than silently zeroing precision");
+    assert_eq!(
+        huge_sd_err.to_refusal().code,
+        RefusalCode::NumericalCertificateFailed207.as_str()
+    );
+
+    // 2. Pooling a Moisture node into an InSituMetal group must refuse (target mismatch).
+    let mismatch_err = fit_hierarchical_bias_posteriors(&HierarchicalBiasRequest {
+        evidence_cut_id: "cut-mismatch".to_string(),
+        confidence_level: 0.90,
+        surprise_alarm_active: false,
+        groups: vec![HierarchicalGroupPrior {
+            group_id: "pit_metal".to_string(),
+            source: MiningSourceKind::OpenPit,
+            target: BiasTargetKind::InSituMetal,
+            hyper_mean: 0.0,
+            hyper_sd: 0.05,
+            between_node_sd: 0.02,
+            refclass_id: None,
+        }],
+        nodes: vec![NodeBiasSpec {
+            node_id: "bad_moisture".to_string(),
+            source: MiningSourceKind::OpenPit,
+            target: BiasTargetKind::Moisture,
+            group_id: Some("pit_metal".to_string()),
+            standalone_prior: None,
+            refclass_id: None,
+        }],
+        observations: Vec::new(),
+    })
+    .expect_err("mismatched target in pooling group must refuse");
+    assert_eq!(
+        mismatch_err.to_refusal().code,
+        RefusalCode::OutsidePhysicalDomain109.as_str()
+    );
+
+    // 3. Asymmetric prior_covariance in analyze_identifiability must refuse.
+    let asym_err = analyze_identifiability(&IdentifiabilityRequest {
+        parameter_names: vec!["a".to_string(), "b".to_string()],
+        prior_means: vec![0.0, 0.0],
+        prior_covariance: vec![0.04, 0.01, -0.01, 0.04],
+        observation_design: vec![1.0, -1.0],
+        observed: vec![0.02],
+        obs_sds: vec![0.01],
+        confidence_level: 0.90,
+    })
+    .expect_err("asymmetric prior_covariance must refuse");
+    assert_eq!(
+        asym_err.to_refusal().code,
+        RefusalCode::OutsidePhysicalDomain109.as_str()
+    );
+
+    // 4. Duplicate target_indices in evaluate_measurement_voi must refuse (prevents VOI double-counting).
+    let base_id = analyze_identifiability(&IdentifiabilityRequest {
+        parameter_names: vec!["a".to_string(), "b".to_string()],
+        prior_means: vec![0.0, 0.0],
+        prior_covariance: vec![0.04, 0.0, 0.0, 0.04],
+        observation_design: vec![1.0, -1.0],
+        observed: vec![0.02],
+        obs_sds: vec![0.01],
+        confidence_level: 0.90,
+    })
+    .expect("baseline identifiability");
+    let dup_voi_err = evaluate_measurement_voi(&MeasurementVoiRequest {
+        baseline: &base_id,
+        unit_error_value_usd: 1_000_000.0,
+        target_indices: vec![0, 0],
+        candidates: vec![CandidateMeasurement {
+            id: "audit_a".to_string(),
+            kind: CandidateMeasurementKind::SamplerAudit,
+            description: "direct audit of a".to_string(),
+            design_row: vec![1.0, 0.0],
+            obs_sd: 0.01,
+            cost_usd: 10_000.0,
+        }],
+    })
+    .expect_err("duplicate target_indices must refuse");
+    assert_eq!(
+        dup_voi_err.to_refusal().code,
+        RefusalCode::OutsidePhysicalDomain109.as_str()
+    );
+
+    // 5. ReconciliationCertificate refuses invalid identifiability (rank > parameter_count),
+    //    NaN parity values, and crafted valid-checksum frames that violate domain invariants on decode.
+    let valid_req = ReconciliationCertificateRequest {
+        period_id: "2026Q2".to_string(),
+        site_id: "site_x".to_string(),
+        evidence_cut_id: "cut-2".to_string(),
+        error_model_version: "v1".to_string(),
+        code_revision: "72b15a48".to_string(),
+        determinism_class: DeterminismClass::DeterministicPerIsa,
+        seed_root: 1,
+        ledger_anchor: None,
+        inputs: vec![InputDigest::new("raw", "a.csv", sha256(b"x"))],
+        parity_notes: vec![ParityExplanation {
+            metric_id: "F2".to_string(),
+            site_value: 0.95,
+            recomputed_value: 0.95,
+            status: ParityDifferenceStatus::Explained,
+            rationale: "matched".to_string(),
+        }],
+        balance: BalanceCertificateSummary {
+            node_residuals: vec![NodeBalanceRecord {
+                node_label: "rom".to_string(),
+                raw_residual: 1.0,
+                reconciled_residual: 0.0,
+            }],
+            chi_square: 0.5,
+            degrees_of_freedom: 1,
+            global_p_value: 0.48,
+            max_relative_closure_error: 1e-15,
+            disposition: CommitDisposition::Admit,
+            flagged_suspects: Vec::new(),
+        },
+        posteriors: PosteriorCertificateSummary {
+            node_quantities: Vec::new(),
+            f_factors: Vec::new(),
+            bias_terms: Vec::new(),
+            latent_inventories: Vec::new(),
+        },
+        identifiability: IdentifiabilityCertificateSummary {
+            observation_rank: 3,
+            parameter_count: 2,
+            refused_pairs: Vec::new(),
+        },
+        forecast_scores: Vec::new(),
+        attestation: AttestationStatus::DraftUnreviewed,
+        require_admitted_balance: true,
+    };
+    assert_eq!(
+        ReconciliationCertificate::build(valid_req.clone())
+            .expect_err("rank > parameter_count must refuse")
+            .to_refusal()
+            .code,
+        RefusalCode::OutsidePhysicalDomain109.as_str()
+    );
+    let mut bad_parity = valid_req;
+    bad_parity.identifiability.observation_rank = 2;
+    bad_parity.parity_notes[0].site_value = f64::NAN;
+    assert_eq!(
+        ReconciliationCertificate::build(bad_parity)
+            .expect_err("NaN parity note must refuse")
+            .to_refusal()
+            .code,
+        RefusalCode::OutsidePhysicalDomain109.as_str()
+    );
+}

@@ -1,0 +1,86 @@
+# Posterior reconciliation worksheet fixture (BD-162, plan §20.9 & §20.12 GB-24/GB-25).
+schema = "fmine.recon-posterior.v1"
+site = "synthetic_cu_au_01"
+period = "2026Q1"
+evidence_cut_id = "cut-2026Q1-close"
+error_model_version = "err-model-v1.0"
+ownership_basis = "100%_project"
+confidence_level = "0.90"
+global_alpha = "0.05"
+measurement_alpha = "0.05"
+unit_error_value_usd = "20000000"
+seed_root = "2026162"
+
+[[variable]]
+id = "truck_tonnes"
+kind = "stream"
+channel = "dry_mass"
+observed = "1000000"
+std_dev = "30000"
+
+[[variable]]
+id = "mill_tonnes"
+kind = "stream"
+channel = "dry_mass"
+observed = "960000"
+std_dev = "9600"
+
+[[variable]]
+id = "stockpile_delta"
+kind = "inventory_delta"
+channel = "dry_mass"
+observed = "25000"
+std_dev = "15000"
+
+[[constraint]]
+label = "node:rom:dry_mass"
+terms = "truck_tonnes:1,mill_tonnes:-1,stockpile_delta:-1"
+target = "0"
+
+[[f_factor]]
+registry_key = "synthetic:gb24:F2_dry_tonnes"
+definition_version = "v1.0"
+numerator = "mill_tonnes"
+denominator = "truck_tonnes"
+
+[[parity]]
+metric_id = "GB24_mill_tonnes"
+site_value = "961136"
+recomputed_value = "961135.76"
+status = "explained"
+rationale = "Integer tonne rounding in monthly site summary table"
+
+[[bias_node]]
+node_id = "b_gc"
+source = "open_pit"
+target = "in_situ_metal"
+prior_mean = "0.0"
+prior_sd = "0.05"
+
+[[bias_node]]
+node_id = "b_mill"
+source = "plant"
+target = "mill_sampler"
+prior_mean = "0.0"
+prior_sd = "0.05"
+
+[[bias_obs]]
+label = "f2_monthly_gap"
+terms = "b_gc:1,b_mill:-1"
+observed = "-0.08"
+obs_sd = "0.02"
+
+[[voi_candidate]]
+id = "mill_stopped_belt_audit"
+kind = "sampler_audit"
+description = "Stopped-belt audit on mill head sampler"
+terms = "b_mill:1"
+obs_sd = "0.015"
+cost_usd = "50000"
+
+[[forecast_score]]
+forecast_id = "fcst-2026Q1-mill-tonnes"
+forecast_digest_hex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+realized_mean = "961135.76"
+interval_covered = "true"
+crps = "1420.5"

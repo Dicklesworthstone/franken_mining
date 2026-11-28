@@ -1,0 +1,119 @@
+# Technical-report Data-Verification Evidence Index worksheet (BD-174, plan §24.5).
+schema = "fmine.data-verification-index.v1"
+property_name = "Synthetic Gold District — North Deposit"
+effective_date = "2026-06-30"
+standard = "ni43101_proposed"
+evidence_cut_id = "cut-2026Q2-corebox"
+
+[[original]]
+ref_id = "CERT-ALS-2026-001"
+kind = "lab_certificate"
+locator = "cas/labs/als_2026_001.pdf"
+sha256_hex = "1111111111111111111111111111111111111111111111111111111111111111"
+
+[[original]]
+ref_id = "SURV-GYRO-2026"
+kind = "survey_report"
+locator = "cas/surveys/gyro_2026_audit.csv"
+sha256_hex = "2222222222222222222222222222222222222222222222222222222222222222"
+
+[[original]]
+ref_id = "UMP-SGS-2026-Q2"
+kind = "umpire_certificate"
+locator = "cas/labs/sgs_umpire_2026q2.pdf"
+sha256_hex = "3333333333333333333333333333333333333333333333333333333333333333"
+
+[[original]]
+ref_id = "VISIT-QP-2026-05"
+kind = "site_visit_memo"
+locator = "cas/visits/qp_site_visit_2026_05.md"
+sha256_hex = "4444444444444444444444444444444444444444444444444444444444444444"
+
+[[database_audit]]
+audit_id = "COREBOX-AUDIT-2026Q2"
+holes_audited = "142"
+collars_verified = "142"
+surveys_verified = "1380"
+assays_verified = "24500"
+rejected_rows = "0"
+composite_support_mismatches = "0"
+original_refs = "CERT-ALS-2026-001,SURV-GYRO-2026"
+notes = "100% collar/survey cross-check against original acQuire export and gyro logs"
+
+[[qaqc_campaign]]
+campaign_id = "2024-2026-DD"
+qaqc_regime = "modern_full"
+disclosure_depth = "counts_and_failure_rates"
+total_batches = "120"
+batches_without_signed_certificate = "2"
+original_refs = "CERT-ALS-2026-001"
+
+[[qaqc_campaign]]
+campaign_id = "2010-2015-LEGACY"
+qaqc_regime = "legacy_partial"
+disclosure_depth = "rules_only"
+total_batches = "40"
+batches_without_signed_certificate = "12"
+original_refs = "CERT-ALS-2026-001"
+
+[[lab_failure]]
+campaign_id = "2024-2026-DD"
+lab = "ALS-Primary"
+crm_total = "640"
+crm_failures = "9"
+blank_total = "610"
+blank_failures = "4"
+failed_batches_cascaded = "6"
+
+[[control_absent]]
+campaign_id = "2010-2015-LEGACY"
+period_label = "2011Q1-2012Q4"
+control_kind = "field_duplicate"
+routine_samples_affected = "1850"
+
+[[umpire_batch]]
+batch_id = "UMP-2026Q2"
+primary_lab = "ALS-Primary"
+umpire_lab = "SGS-Umpire"
+analyte = "Au"
+method = "FA-AAS-50g"
+pair_count = "180"
+mean_bias_pct = "-0.85"
+bias_ci_lower_pct = "-1.90"
+bias_ci_upper_pct = "0.20"
+cv_avr_pct = "6.4"
+original_refs = "UMP-SGS-2026-Q2"
+
+[[density_survey]]
+density_samples_total = "420"
+density_lab_checks = "18"
+grade_samples_total = "24500"
+nominal_density_spacing_m = "85.0"
+optimal_grid_spacing_m = "50.0"
+survey_holes_total = "142"
+survey_holes_checked = "142"
+survey_instrument = "North-seeking gyro"
+original_refs = "SURV-GYRO-2026"
+
+[[site_visit]]
+visit_date = "2026-05-14"
+qp_role = "Independent Geology QP"
+scope_observed = "Core logging shed, twin collars, primary preparation lab, pulp storage"
+check_samples_collected = "24"
+original_refs = "VISIT-QP-2026-05"
+
+[[check_sampling]]
+campaign_id = "2024-2026-DD"
+sample_count = "24"
+analyte = "Au"
+method = "FA-AAS-50g"
+mean_relative_diff_pct = "1.4"
+original_refs = "VISIT-QP-2026-05"
+
+[[audit_finding]]
+finding_id = "FIND-E164-DQO"
+category = "missing_dqo"
+severity = "moderate"
+summary = "Legacy 2010-2015 campaign lacked formally documented Data Quality Objectives (E164)"
+resolved = "false"
+source_ref = "VISIT-QP-2026-05"

@@ -21,6 +21,12 @@ pub const FMT_RECON_CERT_V1: u16 = 1;
 /// Subject kind recorded in the outer `FMT-CERT-1` certificate envelope.
 pub const RECON_CERT_SUBJECT_KIND: &str = "touchstone_reconciliation";
 
+/// Maximum string length permitted in any certificate field (matches `FMT-CERT-1` decoder cap).
+pub const MAX_CERT_STR_BYTES: usize = 4096;
+
+/// Maximum item count permitted in any repeated certificate section (decode DoS bound).
+pub const MAX_CERT_ITEMS: usize = 4096;
+
 /// Disposition of an R0 site-pack parity difference (§20.9 Parity row).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -279,47 +285,104 @@ impl ReconciliationCertificate {
         false
     }
 
-    /// Validates all §20.9, `G-TOUCH-4`, and `INV-005` invariants, canonicalizes inputs, and builds
-    /// a self-verifying [`ReconciliationCertificate`].
-    pub fn build(mut req: ReconciliationCertificateRequest) -> Result<Self, ReconError> {
-        if req.period_id.trim().is_empty()
-            || req.site_id.trim().is_empty()
-            || req.evidence_cut_id.trim().is_empty()
-            || req.error_model_version.trim().is_empty()
-            || req.code_revision.trim().is_empty()
-        {
+    fn validate_invariants(&self) -> Result<(), ReconError> {
+        let check_str = |field: &str, value: &str| -> Result<(), ReconError> {
+            if value.trim().is_empty() || value.len() > MAX_CERT_STR_BYTES {
+                return Err(ReconError::invalid(
+                    field,
+                    format!("{field} must be non-empty and <= {MAX_CERT_STR_BYTES} bytes"),
+                ));
+            }
+            Ok(())
+        };
+        let check_len = |field: &str, len: usize| -> Result<(), ReconError> {
+            if len > MAX_CERT_ITEMS {
+                return Err(ReconError::invalid(
+                    field,
+                    format!("{field} count {len} exceeds maximum {MAX_CERT_ITEMS}"),
+                ));
+            }
+            Ok(())
+        };
+
+        check_str("certificate.period_id", &self.period_id)?;
+        check_str("certificate.site_id", &self.site_id)?;
+        check_str("certificate.evidence_cut_id", &self.evidence_cut_id)?;
+        check_str("certificate.error_model_version", &self.error_model_version)?;
+        check_str("certificate.code_revision", &self.code_revision)?;
+
+        check_len("certificate.inputs", self.inputs.len())?;
+        for inp in &self.inputs {
+            check_str("certificate.inputs.role", &inp.role)?;
+            check_str("certificate.inputs.locator", &inp.locator)?;
+        }
+        if self.inputs.windows(2).any(|w| w[0] >= w[1]) {
             return Err(ReconError::invalid(
-                "certificate.metadata",
-                "period_id, site_id, evidence_cut_id, error_model_version, and code_revision must be non-empty",
+                "certificate.inputs",
+                "input closure entries must be strictly sorted and unique",
             ));
         }
-        if req.require_admitted_balance && req.balance.disposition != CommitDisposition::Admit {
-            return Err(ReconError::ConservationGrossError {
-                detail: format!(
-                    "cannot seal committed ReconciliationCertificate for '{}'/'{}': balance disposition is RefuseForInvestigation",
-                    req.site_id, req.period_id
-                ),
-            });
+
+        check_len("certificate.parity_notes", self.parity_notes.len())?;
+        for p in &self.parity_notes {
+            check_str("certificate.parity_notes.metric_id", &p.metric_id)?;
+            check_str("certificate.parity_notes.rationale", &p.rationale)?;
+            if !(p.site_value.is_finite() && p.recomputed_value.is_finite()) {
+                return Err(ReconError::invalid(
+                    "certificate.parity_notes",
+                    format!("parity note '{}' has non-finite values", p.metric_id),
+                ));
+            }
         }
-        if !(req.balance.chi_square.is_finite()
-            && req.balance.chi_square >= 0.0
-            && req.balance.global_p_value.is_finite()
-            && (0.0..=1.0).contains(&req.balance.global_p_value)
-            && req.balance.max_relative_closure_error.is_finite()
-            && req.balance.max_relative_closure_error >= 0.0)
+
+        check_len(
+            "certificate.balance.node_residuals",
+            self.balance.node_residuals.len(),
+        )?;
+        for nr in &self.balance.node_residuals {
+            check_str("certificate.balance.node_label", &nr.node_label)?;
+            if !(nr.raw_residual.is_finite() && nr.reconciled_residual.is_finite()) {
+                return Err(ReconError::invalid(
+                    "certificate.balance.node_residuals",
+                    format!("node residual '{}' has non-finite values", nr.node_label),
+                ));
+            }
+        }
+        check_len(
+            "certificate.balance.flagged_suspects",
+            self.balance.flagged_suspects.len(),
+        )?;
+        for s in &self.balance.flagged_suspects {
+            check_str("certificate.balance.flagged_suspects", s)?;
+        }
+        if !(self.balance.chi_square.is_finite()
+            && self.balance.chi_square >= 0.0
+            && self.balance.global_p_value.is_finite()
+            && (0.0..=1.0).contains(&self.balance.global_p_value)
+            && self.balance.max_relative_closure_error.is_finite()
+            && self.balance.max_relative_closure_error >= 0.0)
         {
             return Err(ReconError::invalid(
                 "certificate.balance",
                 "balance statistics must be finite and within valid statistical bounds",
             ));
         }
+
         // Guard G-TOUCH-4: every F-factor must carry a non-empty registry key, non-empty
         // definition version, and valid finite interval.
-        for f in &req.posteriors.f_factors {
-            if f.registry_key.trim().is_empty() || f.definition_version.trim().is_empty() {
+        check_len(
+            "certificate.posteriors.f_factors",
+            self.posteriors.f_factors.len(),
+        )?;
+        for f in &self.posteriors.f_factors {
+            if f.registry_key.trim().is_empty()
+                || f.registry_key.len() > MAX_CERT_STR_BYTES
+                || f.definition_version.trim().is_empty()
+                || f.definition_version.len() > MAX_CERT_STR_BYTES
+            {
                 return Err(ReconError::MissingDefinitionVersion {
                     detail: format!(
-                        "F-factor '{}' must declare non-empty registry_key and definition_version",
+                        "F-factor '{}' must declare bounded non-empty registry_key and definition_version",
                         f.registry_key
                     ),
                 });
@@ -337,20 +400,32 @@ impl ReconciliationCertificate {
                 });
             }
         }
-        for q in req
+        check_len(
+            "certificate.posteriors.node_quantities",
+            self.posteriors.node_quantities.len(),
+        )?;
+        check_len(
+            "certificate.posteriors.bias_terms",
+            self.posteriors.bias_terms.len(),
+        )?;
+        check_len(
+            "certificate.posteriors.latent_inventories",
+            self.posteriors.latent_inventories.len(),
+        )?;
+        for q in self
             .posteriors
             .node_quantities
             .iter()
-            .chain(&req.posteriors.bias_terms)
-            .chain(&req.posteriors.latent_inventories)
+            .chain(&self.posteriors.bias_terms)
+            .chain(&self.posteriors.latent_inventories)
         {
-            if q.id.trim().is_empty()
-                || !(q.mean.is_finite()
-                    && q.std_dev.is_finite()
-                    && q.std_dev >= 0.0
-                    && q.ci_lower.is_finite()
-                    && q.ci_upper.is_finite()
-                    && q.ci_lower <= q.ci_upper)
+            check_str("certificate.posteriors.id", &q.id)?;
+            if !(q.mean.is_finite()
+                && q.std_dev.is_finite()
+                && q.std_dev >= 0.0
+                && q.ci_lower.is_finite()
+                && q.ci_upper.is_finite()
+                && q.ci_lower <= q.ci_upper)
             {
                 return Err(ReconError::invalid(
                     "certificate.posteriors",
@@ -358,36 +433,86 @@ impl ReconciliationCertificate {
                 ));
             }
         }
-        for fs in &req.forecast_scores {
-            if fs.forecast_id.trim().is_empty()
-                || fs.forecast_digest_hex.trim().is_empty()
-                || !(fs.realized_mean.is_finite() && fs.crps.is_finite() && fs.crps >= 0.0)
+
+        if self.identifiability.observation_rank > self.identifiability.parameter_count {
+            return Err(ReconError::invalid(
+                "certificate.identifiability",
+                format!(
+                    "observation_rank {} exceeds parameter_count {}",
+                    self.identifiability.observation_rank, self.identifiability.parameter_count
+                ),
+            ));
+        }
+        check_len(
+            "certificate.identifiability.refused_pairs",
+            self.identifiability.refused_pairs.len(),
+        )?;
+        for rp in &self.identifiability.refused_pairs {
+            check_str("certificate.identifiability.first", &rp.first)?;
+            check_str("certificate.identifiability.second", &rp.second)?;
+            check_str(
+                "certificate.identifiability.determined_contrast",
+                &rp.determined_contrast,
+            )?;
+            check_str(
+                "certificate.identifiability.separating_measurement",
+                &rp.separating_measurement,
+            )?;
+            if !(rp.correlation.is_finite()
+                && (-1.0..=1.0).contains(&rp.correlation)
+                && rp.net_voi_usd.is_finite())
             {
+                return Err(ReconError::invalid(
+                    "certificate.identifiability.refused_pairs",
+                    format!(
+                        "refused pair ('{}', '{}') has invalid correlation or net_voi_usd",
+                        rp.first, rp.second
+                    ),
+                ));
+            }
+        }
+
+        check_len("certificate.forecast_scores", self.forecast_scores.len())?;
+        for fs in &self.forecast_scores {
+            check_str("certificate.forecast_scores.forecast_id", &fs.forecast_id)?;
+            check_str(
+                "certificate.forecast_scores.forecast_digest_hex",
+                &fs.forecast_digest_hex,
+            )?;
+            if !(fs.realized_mean.is_finite() && fs.crps.is_finite() && fs.crps >= 0.0) {
                 return Err(ReconError::invalid(
                     "certificate.forecast_scores",
                     format!("forecast score '{}' has invalid fields", fs.forecast_id),
                 ));
             }
         }
+
         if let AttestationStatus::ReviewedAgainst {
             reviewer_role,
             against_digest_hex,
-        } = &req.attestation
-            && (reviewer_role.trim().is_empty() || against_digest_hex.trim().is_empty())
+        } = &self.attestation
         {
-            return Err(ReconError::invalid(
-                "certificate.attestation",
-                "ReviewedAgainst requires non-empty reviewer_role and against_digest_hex",
-            ));
+            check_str("certificate.attestation.reviewer_role", reviewer_role)?;
+            check_str(
+                "certificate.attestation.against_digest_hex",
+                against_digest_hex,
+            )?;
         }
+        Ok(())
+    }
 
-        req.inputs.sort();
-        if req.inputs.windows(2).any(|w| w[0] >= w[1]) {
-            return Err(ReconError::invalid(
-                "certificate.inputs",
-                "duplicate input closure entries",
-            ));
+    /// Validates all §20.9, `G-TOUCH-4`, and `INV-005` invariants, canonicalizes inputs, and builds
+    /// a self-verifying [`ReconciliationCertificate`].
+    pub fn build(mut req: ReconciliationCertificateRequest) -> Result<Self, ReconError> {
+        if req.require_admitted_balance && req.balance.disposition != CommitDisposition::Admit {
+            return Err(ReconError::ConservationGrossError {
+                detail: format!(
+                    "cannot seal committed ReconciliationCertificate for '{}'/'{}': balance disposition is RefuseForInvestigation",
+                    req.site_id, req.period_id
+                ),
+            });
         }
+        req.inputs.sort();
 
         let mut cert = Self {
             format_version: FMT_RECON_CERT_V1,
@@ -409,6 +534,7 @@ impl ReconciliationCertificate {
             payload_sha256: Digest32([0u8; 32]),
             replay_digest_blake3: Digest32([0u8; 32]),
         };
+        cert.validate_invariants()?;
         let body = cert.encode_body_bytes();
         cert.payload_sha256 = sha256(&body);
         cert.replay_digest_blake3 = blake3_hash(&body);
@@ -660,7 +786,18 @@ impl ReconciliationCertificate {
             }
         };
 
-        let n_inputs = get_u32(&mut dec)? as usize;
+        let get_count = |d: &mut Decoder<'_>, field: &str| -> Result<usize, ReconError> {
+            let n = d.get_u32().map_err(|e| ReconError::CertificateTampered {
+                detail: format!("{field} count decode failed: {e}"),
+            })? as usize;
+            if n > MAX_CERT_ITEMS {
+                return Err(ReconError::CertificateTampered {
+                    detail: format!("{field} count {n} exceeds limit {MAX_CERT_ITEMS}"),
+                });
+            }
+            Ok(n)
+        };
+        let n_inputs = get_count(&mut dec, "inputs")?;
         let mut inputs = Vec::with_capacity(n_inputs.min(64));
         for _ in 0..n_inputs {
             let role = get_s(&mut dec)?;
@@ -675,7 +812,7 @@ impl ReconciliationCertificate {
             inputs.push(InputDigest::new(role, locator, digest));
         }
 
-        let n_parity = get_u32(&mut dec)? as usize;
+        let n_parity = get_count(&mut dec, "parity_notes")?;
         let mut parity_notes = Vec::with_capacity(n_parity.min(64));
         for _ in 0..n_parity {
             let metric_id = get_s(&mut dec)?;
@@ -692,7 +829,7 @@ impl ReconciliationCertificate {
             });
         }
 
-        let n_res = get_u32(&mut dec)? as usize;
+        let n_res = get_count(&mut dec, "node_residuals")?;
         let mut node_residuals = Vec::with_capacity(n_res.min(64));
         for _ in 0..n_res {
             let node_label = get_s(&mut dec)?;
@@ -717,7 +854,7 @@ impl ReconciliationCertificate {
                 });
             }
         };
-        let n_suspects = get_u32(&mut dec)? as usize;
+        let n_suspects = get_count(&mut dec, "flagged_suspects")?;
         let mut flagged_suspects = Vec::with_capacity(n_suspects.min(64));
         for _ in 0..n_suspects {
             flagged_suspects.push(get_s(&mut dec)?);
@@ -733,7 +870,7 @@ impl ReconciliationCertificate {
         };
 
         let node_quantities = decode_qty_list(&mut dec)?;
-        let n_ff = get_u32(&mut dec)? as usize;
+        let n_ff = get_count(&mut dec, "f_factors")?;
         let mut f_factors = Vec::with_capacity(n_ff.min(64));
         for _ in 0..n_ff {
             let registry_key = get_s(&mut dec)?;
@@ -760,7 +897,7 @@ impl ReconciliationCertificate {
 
         let observation_rank = get_u32(&mut dec)?;
         let parameter_count = get_u32(&mut dec)?;
-        let n_rp = get_u32(&mut dec)? as usize;
+        let n_rp = get_count(&mut dec, "refused_pairs")?;
         let mut refused_pairs = Vec::with_capacity(n_rp.min(64));
         for _ in 0..n_rp {
             let first = get_s(&mut dec)?;
@@ -784,7 +921,7 @@ impl ReconciliationCertificate {
             refused_pairs,
         };
 
-        let n_fs = get_u32(&mut dec)? as usize;
+        let n_fs = get_count(&mut dec, "forecast_scores")?;
         let mut forecast_scores = Vec::with_capacity(n_fs.min(64));
         for _ in 0..n_fs {
             let forecast_id = get_s(&mut dec)?;
@@ -825,7 +962,7 @@ impl ReconciliationCertificate {
             detail: format!("trailing bytes in RCRB body: {e}"),
         })?;
 
-        Ok(Self {
+        let cert = Self {
             format_version: version,
             period_id,
             site_id,
@@ -844,7 +981,12 @@ impl ReconciliationCertificate {
             attestation,
             payload_sha256: stored_sha,
             replay_digest_blake3: stored_blake3,
-        })
+        };
+        cert.validate_invariants()
+            .map_err(|e| ReconError::CertificateTampered {
+                detail: format!("decoded certificate failed invariant check: {e}"),
+            })?;
+        Ok(cert)
     }
 
     /// Wraps this certificate's verified `payload_sha256` and input closure inside a canonical
@@ -878,6 +1020,11 @@ fn decode_qty_list(dec: &mut Decoder<'_>) -> Result<Vec<CertifiedQuantityInterva
     let n = dec.get_u32().map_err(|e| ReconError::CertificateTampered {
         detail: format!("quantity count decode failed: {e}"),
     })? as usize;
+    if n > MAX_CERT_ITEMS {
+        return Err(ReconError::CertificateTampered {
+            detail: format!("quantity count {n} exceeds limit {MAX_CERT_ITEMS}"),
+        });
+    }
     let mut out = Vec::with_capacity(n.min(64));
     for _ in 0..n {
         let id = dec.get_str(4096).map(ToString::to_string).map_err(|e| {

@@ -1,5 +1,9 @@
-//! DESIGN. Matched-material screening of declared period totals (BD-162, §20.4).
-//! Determinism: BitwisePortable for the exact ratios and classifications.
+//! DESIGN. Matched-material screening and Touchstone posterior reconciliation / attested close
+//! (`BD-162`, plan §20.4 & §20.9).
+//! Determinism: BitwisePortable for matched-cohort screening; DeterministicPerIsa for posterior
+//! reconciliation and certificate sealing.
+
+pub mod posterior;
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -15,7 +19,10 @@ use fmine_units::{ExactQty, UnitsError};
 use crate::worksheet_input::markdown_cell;
 use crate::{Envelope, json_string as quote, worksheet_input};
 
-pub(super) const USAGE: &str = "recon run --input <matched-cohorts.toml>";
+pub(super) const USAGE: &str = "recon run --input <worksheet.toml>";
+pub(super) use posterior::{
+    CLOSE_USAGE, CLOSE_VERB, CloseCommand, ROBOT_DOCS_JSON, execute_close, parse_close,
+};
 const VERB: &str = "recon run";
 const NO_CLAIM: &str = "Conditional arithmetic on declared dry tonnes and contained metal at the same material boundary. Inventory transit, measurement uncertainty and cause are unresolved. No period-close attestation.";
 
@@ -348,15 +355,33 @@ fn screen(text: &str, anchor: &SourceAnchor) -> Result<Envelope, Refusal> {
 }
 
 pub(super) fn execute(input: &Path, root: &Path) -> Envelope {
-    let result = worksheet_input::read(
-        &root.join(input),
-        "matched-cohort reconciliation",
-        1024 * 1024,
-    )
-    .and_then(|(text, source)| screen(&text, &source));
-    let mut env = result.unwrap_or_else(|e| Envelope::refused(VERB, e, vec![]));
-    env.no_claim = Some(NO_CLAIM);
-    env
+    let result = worksheet_input::read(&root.join(input), "reconciliation worksheet", 1024 * 1024)
+        .and_then(|(text, source)| {
+            let is_posterior = parse_subset(&text)
+                .ok()
+                .and_then(|doc| {
+                    doc.top
+                        .iter()
+                        .find(|f| f.key == "schema")
+                        .and_then(|f| match &f.value {
+                            TomlValue::Str(s) => Some(s == posterior::POSTERIOR_SCHEMA),
+                            TomlValue::Int(_) => None,
+                        })
+                })
+                .unwrap_or(false);
+            if is_posterior {
+                posterior::run_posterior(&text, &source, input)
+            } else {
+                let mut env = screen(&text, &source)?;
+                env.no_claim = Some(NO_CLAIM);
+                Ok(env)
+            }
+        });
+    result.unwrap_or_else(|e| {
+        let mut env = Envelope::refused(VERB, e, vec![]);
+        env.no_claim = Some(NO_CLAIM);
+        env
+    })
 }
 
 #[cfg(test)]

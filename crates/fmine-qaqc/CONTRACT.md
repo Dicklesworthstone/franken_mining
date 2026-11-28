@@ -7,7 +7,7 @@ Corebox QA/QC kernel (`BD-167`, `BD-168`, `BD-169`, `BD-282`, `BD-283`, `BD-284`
 - **Layer:** K1
 - **Subsystem:** Corebox
 - **LOC budget:** 15,000 planned / 17,000 ceiling
-- **Allowed Module Families:** `["censored", "crm", "duplicates", "error", "insertion", "monitors", "stats"]`
+- **Allowed Module Families:** `["censored", "crm", "duplicates", "error", "insertion", "monitors", "stats", "verification_index"]`
 
 ## 2. Inputs
 - Canonical `fmine-drill::records` types (`Sample`, `QcInsertion`, `AssayResult`, `AssayValue`, `AssayMethod`, `BlankStage`, `DuplicateStage`, `SampleType`) and typed policy/input structs (`SiteCrmRule`, `CrmBatchInput`, `InsertionTargetSpec`, `SiteBlankRule`, `CrmMonitorConfig`, `DuplicatePair`, `GyCalibratedConstants`, `GyNomogramRequest`, `NuggetSplitInput`, `CensoredDataset`).
@@ -67,7 +67,7 @@ Derived analytical QA/QC diagnostics and error-model parameters (layer L0/Corebo
 ## 10. Known gaps
 - Does not persist `BatchFlag` or `InvestigationCase` ledger records directly; emits `FailedBatchCascade` and `MonitorAlarm` values for `fmine-drill` / `fmine-calib` callers to commit.
 - Does not store CAS lab-certificate bytes (`BD-171` lives in ingest/CAS adapters).
-- Umpire inter-laboratory hierarchical bias model (RMA + mixed-effects bias) and technical-report Data-Verification Index rendering live in downstream beads (`BD-174`).
+- Umpire inter-laboratory hierarchical bias model (RMA + mixed-effects bias) remains downstream; technical-report Data-Verification Index skeleton (`BD-174`, §24.5) is implemented in `verification_index`.
 
 ## 11. Public API
 - `QaqcError` (`error::QaqcError`)
@@ -76,6 +76,7 @@ Derived analytical QA/QC diagnostics and error-model parameters (layer L0/Corebo
 - `monitors::{AlarmScope, MonitorKind, MonitorAlarm, CrmStreamKey, CrmReferenceParams, CrmMonitorConfig, CrmMonitorSnapshot, CrmStreamValue, CrmSequentialMonitor}`
 - `duplicates::{THOMPSON_HOWARTH_CAVEAT, THOMPSON_HOWARTH_MIN_PAIRS, GY_DEFAULT_K, GY_DEFAULT_ALPHA, GY_SAFETY_LINE_REL_VAR, GY_MIN_INCREMENTS, DuplicatePair, DuplicatePolicy, DuplicatePairStatus, DuplicatePairVerdict, ThompsonHowarthEstimate, DuplicatePrecisionReport, StageDecompositionStatus, StageVarianceDecomposition, PrecisionReferenceLevel, evaluate_duplicates, decompose_duplicate_stages, reference_precision_policy_defaults, GyGeneralInput, gy_general_fse_variance, GyCalibrationMethod, GyGradeWindow, GyCalibratedConstants, ThirtyPiecesInput, ThirtyPiecesDiameter, ThirtyPiecesCalibration, calibrate_thirty_pieces, GySamplingStage, GyNomogramRequest, NomogramEvidence, NomogramValidity, GyStageOutcome, GyNomogramReport, evaluate_gy_nomogram, InformationOption, NuggetSplitInput, NuggetSplitDecision, evaluate_nugget_split}`
 - `censored::{SubstitutionAttempt, refuse_dl_substitution, CensoredDataset, LognormalMleFit, RosFit, fit_censored_lognormal_mle, fit_censored_ros}`
+- `verification_index::{DENSITY_LAB_CHECK_MIN_PCT, DENSITY_LAB_CHECK_MAX_PCT, TechnicalReportStandard, OriginalArtifactKind, CasOriginalRef, DrillholeDatabaseAudit, QaqcRegime, DisclosureDepth, CrmEvidenceSummary, BlankEvidenceSummary, DuplicateEvidenceSummary, MonitorEvidenceSummary, LabFailureSummary, ControlAbsentRecord, QaqcCampaignEvidence, UmpireBatchSummary, DensityAndSurveyVerification, SiteVisitRecord, CheckSamplingRecord, FindingCategory, FindingSeverity, AuditFinding, ClassificationLabelAttempt, refuse_classification_label, DataVerificationIndexRequest, TechnicalReportItemSection, DataVerificationIndex, build_data_verification_index, render_verification_index_markdown}`
 
 ## 12. Proof obligations
 - `BD-167` (`tests/qaqc_known_answers.rs`):
@@ -114,3 +115,6 @@ Derived analytical QA/QC diagnostics and error-model parameters (layer L0/Corebo
   - `monitor_limits::refused_standardization_preserves_every_monitor_state`
   - `monitor_limits::enormous_finite_dispersion_is_not_silently_reported_as_collapse`
   - `monitor_limits::overflowing_dispersion_is_refused_before_advancing_the_prefix`
+- `BD-174` (`tests/verification_index_tests.rs`, `crates/fmine-verify/tests/recon_cli_e2e.rs`):
+  - `verification_index_tests::test_bd174_data_verification_index_wires_live_qaqc_and_renders_all_standards`
+  - `recon_cli_e2e::test_bd174_cli_drill_verify_index_renders_deterministically`

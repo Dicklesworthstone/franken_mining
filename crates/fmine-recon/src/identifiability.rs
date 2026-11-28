@@ -405,6 +405,72 @@ fn invert_spd(mat: &[f64], k: usize) -> Result<Vec<f64>, ReconError> {
     Ok(inv)
 }
 
+fn checked_inv_sd_and_var(sd: f64, context: &str) -> Result<(f64, f64), ReconError> {
+    let var = sd * sd;
+    if !(var.is_finite() && var > 0.0) {
+        return Err(ReconError::NumericalFailure {
+            detail: format!("{context} variance overflow/underflow (sd={sd})"),
+        });
+    }
+    let inv_sd = 1.0 / sd;
+    let inv_v = 1.0 / var;
+    if !(inv_sd.is_finite() && inv_sd > 0.0 && inv_v.is_finite() && inv_v > 0.0) {
+        return Err(ReconError::NumericalFailure {
+            detail: format!("{context} precision overflow/underflow (sd={sd})"),
+        });
+    }
+    Ok((inv_sd, inv_v))
+}
+
+fn validate_symmetric_matrix(mat: &[f64], k: usize, context: &str) -> Result<(), ReconError> {
+    if mat.len() != k * k {
+        return Err(ReconError::invalid(
+            context,
+            format!("expected {k}x{k} matrix, got len {}", mat.len()),
+        ));
+    }
+    for i in 0..k {
+        let diag = mat[i * k + i];
+        if !(diag.is_finite() && diag > 0.0) {
+            return Err(ReconError::invalid(
+                context,
+                format!("diagonal entry [{i},{i}] must be finite and > 0, got {diag}"),
+            ));
+        }
+    }
+    for i in 0..k {
+        let di = mat[i * k + i];
+        for j in (i + 1)..k {
+            let a = mat[i * k + j];
+            let b = mat[j * k + i];
+            if !(a.is_finite() && b.is_finite()) {
+                return Err(ReconError::invalid(
+                    context,
+                    format!("non-finite off-diagonal entry at [{i},{j}]"),
+                ));
+            }
+            let dj = mat[j * k + j];
+            let scale = a.abs().max(b.abs()).max(det::sqrt(di * dj)).max(1.0e-30);
+            if (a - b).abs() > 1.0e-12 * scale {
+                return Err(ReconError::invalid(
+                    context,
+                    format!("asymmetric matrix at [{i},{j}]: {a} != {b}"),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[inline]
+fn canonical_bits(v: f64) -> u64 {
+    if v == 0.0 {
+        0.0_f64.to_bits()
+    } else {
+        v.to_bits()
+    }
+}
+
 fn max_abs_offdiag_corr(cov: &[f64], k: usize) -> f64 {
     let mut best = 0.0_f64;
     for i in 0..k {
@@ -419,7 +485,7 @@ fn max_abs_offdiag_corr(cov: &[f64], k: usize) -> f64 {
                 continue;
             }
             let sj = det::sqrt(vj);
-            let c = ((cov[i * k + j] / si.max(sj)) / si.min(sj)).abs();
+            let c = ((cov[i * k + j] / si.max(sj)) / si.min(sj)).abs().min(1.0);
             if c.is_finite() && c > best {
                 best = c;
             }
@@ -494,6 +560,11 @@ pub fn analyze_identifiability(
     }
 
     // Prior precision Lambda_0 = Sigma_0^-1 and prior RHS Lambda_0 * mu_0.
+    validate_symmetric_matrix(
+        &request.prior_covariance,
+        k,
+        "identifiability.prior_covariance",
+    )?;
     let prior_prec = invert_spd(&request.prior_covariance, k)?;
     let mut post_prec = prior_prec.clone();
     let mut post_rhs = vec![0.0_f64; k];
@@ -502,20 +573,45 @@ pub fn analyze_identifiability(
         for j in 0..k {
             s += prior_prec[i * k + j] * request.prior_means[j];
         }
+        if !s.is_finite() {
+            return Err(ReconError::NumericalFailure {
+                detail: format!("prior RHS overflow at parameter index {i}"),
+            });
+        }
         post_rhs[i] = s;
     }
 
     let mut weighted_design = vec![0.0_f64; n_obs * k];
     for row_idx in 0..n_obs {
-        let inv_sd = 1.0 / request.obs_sds[row_idx];
-        let inv_v = inv_sd * inv_sd;
+        let (inv_sd, inv_v) = checked_inv_sd_and_var(
+            request.obs_sds[row_idx],
+            &format!("identifiability.obs_sds[{row_idx}]"),
+        )?;
         for i in 0..k {
             let h_i = request.observation_design[row_idx * k + i];
-            weighted_design[row_idx * k + i] = h_i * inv_sd;
+            let wh_i = h_i * inv_sd;
+            if !wh_i.is_finite() {
+                return Err(ReconError::NumericalFailure {
+                    detail: format!("weighted design overflow at obs {row_idx}, param {i}"),
+                });
+            }
+            weighted_design[row_idx * k + i] = wh_i;
             post_rhs[i] += inv_v * h_i * request.observed[row_idx];
+            if !post_rhs[i].is_finite() {
+                return Err(ReconError::NumericalFailure {
+                    detail: format!("posterior RHS overflow at obs {row_idx}, param {i}"),
+                });
+            }
             for j in 0..k {
                 let h_j = request.observation_design[row_idx * k + j];
                 post_prec[i * k + j] += inv_v * h_i * h_j;
+                if !post_prec[i * k + j].is_finite() {
+                    return Err(ReconError::NumericalFailure {
+                        detail: format!(
+                            "posterior precision overflow at obs {row_idx}, entry [{i},{j}]"
+                        ),
+                    });
+                }
             }
         }
     }
@@ -543,6 +639,8 @@ pub fn analyze_hierarchical_identifiability(
     let k = hier.node_ids.len();
     let n_obs = hier.observation_sds.len();
     if k == 0
+        || k > 64
+        || hier.node_posteriors.len() != k
         || hier.node_prior_covariance.len() != k * k
         || hier.node_posterior_covariance.len() != k * k
         || hier.observation_design.len() != n_obs * k
@@ -552,6 +650,36 @@ pub fn analyze_hierarchical_identifiability(
                 .to_string(),
         });
     }
+    if !(hier.confidence_level.is_finite()
+        && hier.confidence_level > 0.0
+        && hier.confidence_level < 1.0)
+    {
+        return Err(ReconError::invalid(
+            "identifiability.confidence_level",
+            format!("must lie in (0, 1), got {}", hier.confidence_level),
+        ));
+    }
+    if hier.observation_design.iter().any(|v| !v.is_finite())
+        || hier
+            .node_posteriors
+            .iter()
+            .any(|p| !p.posterior_mean.is_finite())
+    {
+        return Err(ReconError::NumericalFailure {
+            detail: "hierarchical bias result contains non-finite design or posterior means"
+                .to_string(),
+        });
+    }
+    validate_symmetric_matrix(
+        &hier.node_prior_covariance,
+        k,
+        "identifiability.node_prior_covariance",
+    )?;
+    validate_symmetric_matrix(
+        &hier.node_posterior_covariance,
+        k,
+        "identifiability.node_posterior_covariance",
+    )?;
     let mu_post: Vec<f64> = hier
         .node_posteriors
         .iter()
@@ -560,9 +688,23 @@ pub fn analyze_hierarchical_identifiability(
     let node_post_prec = invert_spd(&hier.node_posterior_covariance, k)?;
     let mut weighted_design = vec![0.0_f64; n_obs * k];
     for r in 0..n_obs {
-        let inv_sd = 1.0 / hier.observation_sds[r];
+        let obs_sd = hier.observation_sds[r];
+        if !(obs_sd.is_finite() && obs_sd > 0.0) {
+            return Err(ReconError::invalid(
+                "identifiability.observation_sds",
+                format!("observation sd [{r}] must be finite and > 0"),
+            ));
+        }
+        let (inv_sd, _) =
+            checked_inv_sd_and_var(obs_sd, &format!("identifiability.observation_sds[{r}]"))?;
         for c in 0..k {
-            weighted_design[r * k + c] = hier.observation_design[r * k + c] * inv_sd;
+            let w = hier.observation_design[r * k + c] * inv_sd;
+            if !w.is_finite() {
+                return Err(ReconError::NumericalFailure {
+                    detail: format!("weighted design overflow at obs {r}, col {c}"),
+                });
+            }
+            weighted_design[r * k + c] = w;
         }
     }
 
@@ -616,7 +758,7 @@ fn build_identifiability_report(
             if sj <= 0.0 {
                 continue;
             }
-            let corr = (post_cov[i * k + j] / si.max(sj)) / si.min(sj);
+            let corr = ((post_cov[i * k + j] / si.max(sj)) / si.min(sj)).clamp(-1.0, 1.0);
             let abs_c = corr.abs();
             if abs_c > max_pair_corr[i] {
                 max_pair_corr[i] = abs_c;
@@ -689,15 +831,15 @@ fn build_identifiability_report(
     enc.put_u32(subspaces.rank as u32);
     for p in &parameters {
         enc.put_str(&p.name);
-        enc.put_u64(p.posterior_mean.to_bits());
-        enc.put_u64(p.posterior_sd.to_bits());
+        enc.put_u64(canonical_bits(p.posterior_mean));
+        enc.put_u64(canonical_bits(p.posterior_sd));
         enc.put_u8(u8::from(p.identifiable));
     }
     enc.put_u32(confounded_pairs.len() as u32);
     for pair in &confounded_pairs {
         enc.put_str(&pair.first);
         enc.put_str(&pair.second);
-        enc.put_u64(pair.correlation.to_bits());
+        enc.put_u64(canonical_bits(pair.correlation));
     }
     let digest_hex = blake3_hash(&enc.finish()).to_hex();
 
@@ -788,6 +930,15 @@ pub fn evaluate_measurement_voi(
     request: &MeasurementVoiRequest<'_>,
 ) -> Result<Vec<MeasurementVoiScore>, ReconError> {
     let k = request.baseline.parameter_count;
+    if k == 0
+        || request.baseline.posterior_precision.len() != k * k
+        || request.baseline.posterior_covariance.len() != k * k
+        || !request.baseline.weighted_design.len().is_multiple_of(k)
+    {
+        return Err(ReconError::NumericalFailure {
+            detail: "VOI baseline identifiability report has inconsistent dimensions".to_string(),
+        });
+    }
     if !(request.unit_error_value_usd.is_finite() && request.unit_error_value_usd >= 0.0) {
         return Err(ReconError::invalid(
             "voi.unit_error_value_usd",
@@ -803,11 +954,18 @@ pub fn evaluate_measurement_voi(
     let targets: Vec<usize> = if request.target_indices.is_empty() {
         (0..k).collect()
     } else {
+        let mut seen_targets = BTreeSet::new();
         for &idx in &request.target_indices {
             if idx >= k {
                 return Err(ReconError::invalid(
                     "voi.target_indices",
                     format!("target index {idx} >= parameter count {k}"),
+                ));
+            }
+            if !seen_targets.insert(idx) {
+                return Err(ReconError::invalid(
+                    "voi.target_indices",
+                    format!("duplicate target index {idx}"),
                 ));
             }
         }
@@ -854,11 +1012,19 @@ pub fn evaluate_measurement_voi(
 
         // Augmented precision: Lambda_new = Lambda_base + (1 / obs_sd^2) * h * h^T.
         let mut aug_prec = request.baseline.posterior_precision.clone();
-        let inv_sd = 1.0 / cand.obs_sd;
-        let inv_v = inv_sd * inv_sd;
+        let (inv_sd, inv_v) =
+            checked_inv_sd_and_var(cand.obs_sd, &format!("voi.candidate '{}'", cand.id))?;
         for i in 0..k {
             for j in 0..k {
                 aug_prec[i * k + j] += inv_v * cand.design_row[i] * cand.design_row[j];
+                if !aug_prec[i * k + j].is_finite() {
+                    return Err(ReconError::NumericalFailure {
+                        detail: format!(
+                            "candidate '{}' augmented precision overflow at [{i},{j}]",
+                            cand.id
+                        ),
+                    });
+                }
             }
         }
         let aug_cov = invert_spd(&aug_prec, k)?;
@@ -867,7 +1033,13 @@ pub fn evaluate_measurement_voi(
         let mut aug_design = Vec::with_capacity((base_n_obs + 1) * k);
         aug_design.extend_from_slice(&request.baseline.weighted_design);
         for &h_j in &cand.design_row {
-            aug_design.push(h_j * inv_sd);
+            let w = h_j * inv_sd;
+            if !w.is_finite() {
+                return Err(ReconError::NumericalFailure {
+                    detail: format!("candidate '{}' weighted design row overflow", cand.id),
+                });
+            }
+            aug_design.push(w);
         }
         let post_rank = decompose_operator_subspaces(&aug_design, base_n_obs + 1, k).rank;
         let post_corr_max = max_abs_offdiag_corr(&aug_cov, k);

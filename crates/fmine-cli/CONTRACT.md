@@ -64,6 +64,22 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
   refuse; tiny representable ROS dispersion remains positive. Native tests use independent likelihood
   and ROS references, exact uncensored moments, partial failure and numerical boundary controls.
 
+- DESIGN (BD-174, plan §24.5). `drill_verify_index` exposes `drill verify-index --input <verification-index.toml>`
+  over `fmine-qaqc::verification_index`. Renders a deterministic, non-classifying (`G-HALL-1`, `INV-002`)
+  per-item technical-report Data-Verification Evidence Index skeleton (`ni43101_current`, `ni43101_proposed`
+  with mandatory `G-HALL-2` draft banner, `sk1300`, `jorc2012_table1`) linking CAS SHA-256 signed originals
+  and explicitly synthesizing `C2 §4.5f` rules-only, `E168` absent-control, `E382` `< 5%` density lab check,
+  `E383` sparse density grid, and uncertified-batch gaps.
+
+- DESIGN (BD-162, plan §20.9). `recon run --input <worksheet.toml>` supports both `fmine.matched-cohorts.v1`
+  screening and `fmine.recon-posterior.v1` Touchstone WLS, gross-error, F-factor (`G-TOUCH-4`), hierarchical
+  bias, identifiability (`G-TOUCH-2`), and Measurement VOI runs, emitting a replay-stable `review_target_digest`
+  without writing files. `recon close --input <recon-posterior.toml> --out-dir <dir>` enforces `INV-005`
+  (`FMINE-REF-101` gross-error gate), `G-TOUCH-4` (`FMINE-REF-107`), human digest attestation (`FMINE-REF-505`
+  on stale `--against-digest` unless `--allow-draft`), append-only non-overwrite, and seals canonical
+  `recon_certificate.rcrt` + `recon_certificate.cert` (`FMT-CERT-1`) + `inputs/<locator>` verified offline
+  by `fmine-verify cert --inputs-dir`.
+
 - DESIGN (BD-167, BD-282). `drill_qaqc` exposes `drill qaqc --input <batch.toml>` over the numerical
   CRM engine. A bounded `fmine.crm-batch.v1` declaration supplies CRM, lab, analyte, method, unit,
   certificate-source label, evidence lane, omitted uncertainty, certified mean, all three named SD
@@ -383,7 +399,7 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     ratio. The held-out error uses the reported comparable actual. Selection, original scope and price
     normalization remain the submitter's declarations. The ratio has no calibration claim.
 - **LOC budget:** 54,000 planned / 72,000 ceiling
-- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "doctor", "drill", "drill_qaqc", "drill_quality", "drill_monitor", "drill_censored", "triage", "geo", "investment", "pit", "plan_certificate", "recon", "repair", "robot", "verb_catalog", "schedule", "lane_cutoff", "route_blend", "plant", "worksheet_input", "html", "decision", "capital", "capital_return", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "spatial", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables", "screen_target", "waterfall"]`
+- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "doctor", "drill", "drill_qaqc", "drill_quality", "drill_monitor", "drill_censored", "drill_verify_index", "triage", "geo", "investment", "pit", "plan_certificate", "recon", "repair", "robot", "verb_catalog", "schedule", "lane_cutoff", "route_blend", "plant", "worksheet_input", "html", "decision", "capital", "capital_return", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "spatial", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables", "screen_target", "waterfall"]`
 
 - DESIGN (BD-225, plan §§17.8/22.3/23.4): `decide production --manifest <comparison.toml>`
   compares two to sixteen complete source-bound production/valuation alternatives plus one common
