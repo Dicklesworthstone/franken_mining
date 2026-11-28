@@ -12,8 +12,12 @@
 //!
 //! The holes sit on a 50 m grid, each with three gyro stations that steepen it from −60° to −80°. Batches of 100
 //! holes (10 400 records) are chained as a ledger would chain them and fed through `Projection::feed` with the
-//! R-tree deferred; the R-tree is then loaded in one statement. Then 2 000 queries of 25 m and 200 m cubes at
-//! random places in the field, and one batch that relogs 100 intervals with the R-tree kept current.
+//! indexes deferred; `rebuild_indexes` then loads each in one statement. Then 2 000 queries of 25 m and 200 m
+//! cubes at random places in the field, and two batches that relog 100 intervals with the indexes kept current.
+//!
+//! The text index is reported, not required: past `TEXT_INDEX_MAX_ROWS` (10⁵) intervals the store withholds it,
+//! because fsqlite 0.5.1's FTS5 does not scale to a campaign (the store's module documentation). Where it is not
+//! current, the relogs apply without it and the text query is checked to refuse.
 
 #![allow(
     clippy::unwrap_used,
@@ -32,8 +36,8 @@ use fmine_drill::records::{
 };
 use fmine_drill::store::{Change, delta_ops};
 use fmine_ledger::batch::{DeltaBatch, FMT_LEDGER_V2, GENESIS_PREV_HASH};
-use fmine_projection::drill::DrillStore;
 use fmine_projection::drill::boxes::Box3;
+use fmine_projection::drill::{DrillStore, DrillStoreError, Index, IndexState};
 use fmine_projection::projection::Projection;
 
 const CELL: &str = "CELL-SITE(drill-scale)";
@@ -232,10 +236,15 @@ fn test_bbox_p99_over_ten_million_intervals() {
 
     let mut store = projection.into_projector();
     let t = Instant::now();
-    store.rebuild_indexes().unwrap();
+    let states = store.rebuild_indexes().unwrap();
     store.defer_indexes(false);
+    assert_eq!(states.boxes, IndexState::Current);
+    let texts = match &states.texts {
+        IndexState::Current => "\"current\"".to_string(),
+        other => format!("\"{}\"", format!("{other:?}").replace('"', "'")),
+    };
     report(format!(
-        "{{\"phase\":\"index_load\",\"rows\":{intervals},\"seconds\":{:.1},\"rss_mib\":{}}}",
+        "{{\"phase\":\"index_load\",\"rows\":{intervals},\"seconds\":{:.1},\"rss_mib\":{},\"texts\":{texts}}}",
         t.elapsed().as_secs_f64(),
         rss_kib() / 1024
     ));
@@ -300,22 +309,40 @@ fn test_bbox_p99_over_ten_million_intervals() {
         prev = relog.batch_digest().unwrap();
         seq += 1;
     }
-    let mut times = Vec::new();
-    for _ in 0..20 {
-        let t = Instant::now();
-        assert_eq!(
-            projection.projector().text("relogged").unwrap().len(),
-            INTERVALS_PER_HOLE
+    if states.texts == IndexState::Current {
+        let mut times = Vec::new();
+        for _ in 0..20 {
+            let t = Instant::now();
+            assert_eq!(
+                projection.projector().text("relogged").unwrap().len(),
+                INTERVALS_PER_HOLE
+            );
+            times.push(t.elapsed());
+        }
+        times.sort();
+        report(format!(
+            "{{\"phase\":\"text\",\"query\":\"relogged\",\"hits\":{INTERVALS_PER_HOLE},\"queries\":20,\
+             \"p50_ms\":{:.3},\"max_ms\":{:.3}}}",
+            ms(quantile(&times, 0.5)),
+            ms(times[times.len() - 1])
+        ));
+    } else {
+        let refused = projection.projector().text("relogged").unwrap_err();
+        assert!(
+            matches!(
+                refused,
+                DrillStoreError::IndexStale {
+                    index: Index::Texts,
+                    reason: Some(_)
+                }
+            ),
+            "{refused:?}"
         );
-        times.push(t.elapsed());
+        report(format!(
+            "{{\"phase\":\"text\",\"query\":\"relogged\",\"refused\":\"{}\"}}",
+            refused.to_refusal().code
+        ));
     }
-    times.sort();
-    report(format!(
-        "{{\"phase\":\"text\",\"query\":\"relogged\",\"hits\":{INTERVALS_PER_HOLE},\"queries\":20,\
-         \"p50_ms\":{:.3},\"max_ms\":{:.3}}}",
-        ms(quantile(&times, 0.5)),
-        ms(times[times.len() - 1])
-    ));
     let mid = holes / 2;
     let corner = [
         400_000.0 + SPACING_M * (mid % side) as f64,

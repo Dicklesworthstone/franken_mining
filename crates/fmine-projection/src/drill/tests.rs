@@ -418,9 +418,9 @@ fn text_rows(store: &DrillStore) -> BTreeMap<i64, String> {
     .unwrap()
 }
 
-/// The store holds exactly `want`. While its indexes are current, the R-tree holds a row covering each located
-/// box under the interval's current R-tree id, the text index holds each interval's text under its current text
-/// id, and every other index row is counted as garbage.
+/// The store holds exactly `want`. While the R-tree is current it holds a row covering each located box under the
+/// interval's current R-tree id; while the text index is current it holds each interval's text under its current
+/// text id; and every other row of a current index is counted as garbage.
 fn assert_holds(store: &DrillStore, want: &Expected, context: &str) {
     let keys = store.record_keys().unwrap();
     assert_eq!(
@@ -445,20 +445,32 @@ fn assert_holds(store: &DrillStore, want: &Expected, context: &str) {
         want.unlocated,
         "{context}: unlocated holes"
     );
-    if !store.indexes_are_current().unwrap() {
+    let states = store.index_states().unwrap();
+    let garbage = store.index_garbage();
+    if states.texts == IndexState::Current {
+        let texts = text_rows(store);
+        for iv in &want.intervals {
+            let (_, tid) = ids_of(store, &iv.at.interval_id);
+            assert_eq!(
+                texts.get(&tid),
+                Some(&iv.body),
+                "{context}: text of {}",
+                iv.at.interval_id
+            );
+        }
+        assert_eq!(
+            texts.len() as u64,
+            want.intervals.len() as u64 + garbage.stale_texts,
+            "{context}: text rows"
+        );
+    }
+    if states.boxes != IndexState::Current {
         return;
     }
-    let (boxes, texts) = (rtree_rows(store), text_rows(store));
-    let garbage = store.index_garbage();
+    let boxes = rtree_rows(store);
     let mut located = 0;
     for iv in &want.intervals {
-        let (bid, tid) = ids_of(store, &iv.at.interval_id);
-        assert_eq!(
-            texts.get(&tid),
-            Some(&iv.body),
-            "{context}: text of {}",
-            iv.at.interval_id
-        );
+        let (bid, _) = ids_of(store, &iv.at.interval_id);
         let Some((_, b)) = &iv.located else {
             assert_eq!(
                 bid, None,
@@ -491,11 +503,14 @@ fn assert_holds(store: &DrillStore, want: &Expected, context: &str) {
         located + garbage.stale_boxes,
         "{context}: R-tree rows"
     );
-    assert_eq!(
-        texts.len() as u64,
-        want.intervals.len() as u64 + garbage.stale_texts,
-        "{context}: text rows"
-    );
+}
+
+/// The refusal of a query on `index` while it is stale.
+const fn stale(index: Index) -> DrillStoreError {
+    DrillStoreError::IndexStale {
+        index,
+        reason: None,
+    }
 }
 
 /// Query boxes around the campaign: random ones, and for each located interval its own box and its upper corner
@@ -688,15 +703,22 @@ fn test_a_deferred_rebuild_equals_the_incremental_store() {
     rebuilt.catch_up(&batches[..20]).unwrap();
     let any = Box3::new([0.0; 3], [1e7; 3]).unwrap();
     let refused = rebuilt.projector().bbox(CRS, &any).unwrap_err();
-    assert_eq!(refused, DrillStoreError::IndexStale);
+    assert_eq!(refused, stale(Index::Boxes));
     assert_eq!(refused.to_refusal().code, "FMINE-REF-502");
     assert_eq!(
         rebuilt.projector().text("schist").unwrap_err(),
-        DrillStoreError::IndexStale
+        stale(Index::Texts)
     );
     assert!(!rebuilt.projector().indexes_are_current().unwrap());
     let mut store = rebuilt.into_projector();
-    store.rebuild_indexes().unwrap();
+    let states = store.rebuild_indexes().unwrap();
+    assert_eq!(
+        states,
+        IndexStates {
+            boxes: IndexState::Current,
+            texts: IndexState::Current
+        }
+    );
     store.defer_indexes(false);
     assert_eq!(store.index_garbage(), IndexGarbage::default());
     let mut rebuilt = Projection::open(store).unwrap();
@@ -914,8 +936,8 @@ fn crash_child(k: usize, n: u64) -> PathBuf {
     path
 }
 
-/// A process killed at any write of `rebuild_indexes` leaves the indexes either as they were, or stale (bbox and
-/// text refuse until a rebuild), or rebuilt; never current and wrong. A rebuild after the crash repairs them.
+/// A process killed at any write of `rebuild_indexes` leaves each index as it was, stale (its queries refuse until
+/// a rebuild) or rebuilt; never current and wrong. A rebuild after the crash repairs them.
 #[cfg(unix)]
 #[test]
 fn test_a_crash_in_an_index_rebuild_leaves_them_current_or_refusing() {
@@ -933,19 +955,21 @@ fn test_a_crash_in_an_index_rebuild_leaves_them_current_or_refusing() {
         let mut store = DrillStore::open(crash_child(CRASH_BATCHES, n)).unwrap();
         let context = format!("crash at write {n} of {writes} of the index rebuild");
         assert_holds(&store, &want, &context);
-        if store.indexes_are_current().unwrap() {
+        let states = store.index_states().unwrap();
+        if states.boxes == IndexState::Current {
             assert_bbox_answers(&store, &want, &qs, &context);
+        } else {
+            assert_eq!(states.boxes, IndexState::Stale, "{context}");
+            assert_eq!(store.bbox(CRS, &qs[0].1).unwrap_err(), stale(Index::Boxes));
+        }
+        if states.texts == IndexState::Current {
             assert_text_answers(&store, &want, &context);
         } else {
+            assert_eq!(states.texts, IndexState::Stale, "{context}");
+            assert_eq!(store.text("schist").unwrap_err(), stale(Index::Texts));
+        }
+        if states.boxes == IndexState::Current && states.texts == IndexState::Stale {
             stale_seen += 1;
-            assert_eq!(
-                store.bbox(CRS, &qs[0].1).unwrap_err(),
-                DrillStoreError::IndexStale
-            );
-            assert_eq!(
-                store.text("schist").unwrap_err(),
-                DrillStoreError::IndexStale
-            );
         }
         if n == writes {
             assert_eq!(store.index_garbage(), IndexGarbage::default(), "{context}");
@@ -956,7 +980,7 @@ fn test_a_crash_in_an_index_rebuild_leaves_them_current_or_refusing() {
     }
     assert!(
         stale_seen > 0,
-        "no crash point fell between the two transactions"
+        "no crash point fell between the R-tree load and the text load"
     );
 }
 
@@ -1079,4 +1103,239 @@ fn test_a_store_of_another_schema_is_refused() {
         }
     );
     assert_eq!(err.to_refusal().code, "FMINE-REF-506");
+}
+
+/// fsqlite 0.5.1's FTS5 fails some writes (module documentation). Here the engine itself fails them: intervals
+/// whose only logging text is a 4,094-byte mineralization field repeating one word. A batch the engine cannot index
+/// still applies, the R-tree keeps serving, and text queries refuse, naming the engine's failure, until a rebuild
+/// loads the text index. A rebuild that meets the limit leaves the text index failed and the R-tree current. If
+/// fsqlite lifts the limit, the `Failed` assertions fail, and the module documentation and INT-FSQL-001 must say so.
+#[test]
+fn test_a_text_index_the_engine_cannot_write_fails_alone() {
+    let survey = Survey {
+        survey_id: "H0-S0".to_string(),
+        hole_id: hole_id(0),
+        depth_mm: 0,
+        instrument: SurveyInstrument::Gyro,
+        orientation: Some(Orientation {
+            azimuth_deg: 90.0,
+            dip_deg: -60.0,
+            sigma_azimuth_deg: 0.5,
+            sigma_dip_deg: 0.25,
+        }),
+        magnetic_interference: false,
+        run: RunDirection::Out,
+    };
+    let hole = [
+        Change::Put(DrillRecord::Collar(collar(0, &mut Rng(5)))),
+        Change::Put(DrillRecord::Survey(survey)),
+    ];
+    let short = |i: usize, mineralization: &str| {
+        DrillRecord::Interval(Interval {
+            interval_id: format!("L{i:03}"),
+            hole_id: hole_id(0),
+            from_mm: 1_000 * i as u64,
+            to_mm: 1_000 * (i as u64 + 1),
+            mineralization: mineralization.to_string(),
+            ..interval(0, 0, &mut Rng(9))
+        })
+    };
+    let long = |i: usize| {
+        let DrillRecord::Interval(iv) = short(i, "pyrite ".repeat(585).trim_end()) else {
+            unreachable!("short gives an interval")
+        };
+        Change::Put(DrillRecord::Interval(Interval {
+            lithology: String::new(),
+            weathering: String::new(),
+            alteration: None,
+            ..iv
+        }))
+    };
+    let everywhere = Box3::new([0.0, 0.0, -1e4], [1e7, 1e7, 1e4]).unwrap();
+
+    // Incremental: 100 short texts, then 400 long ones, then the long ones relogged short.
+    let mut ledger = L0Ledger::new();
+    let lease = ledger.create_cell(CELL, "node-1").unwrap();
+    let mut first = hole.to_vec();
+    first.extend((0..100).map(|i| Change::Put(short(i, "pyrite veins"))));
+    commit(&mut ledger, &lease, &first).unwrap();
+    commit(
+        &mut ledger,
+        &lease,
+        &(100..500).map(long).collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let relogged: Vec<Change> = (100..500)
+        .map(|i| Change::Supersede {
+            record: short(i, "pyrite veins relogged"),
+            reason: "relogged".to_string(),
+        })
+        .collect();
+    commit(&mut ledger, &lease, &relogged).unwrap();
+    let batches = ledger.batches(CELL).unwrap();
+
+    let mut projection = Projection::open(DrillStore::open_in_memory().unwrap()).unwrap();
+    projection.catch_up(&batches[..1]).unwrap();
+    assert!(projection.projector().indexes_are_current().unwrap());
+    assert_eq!(projection.projector().text("pyrite").unwrap().len(), 100);
+
+    projection.catch_up(&batches[..2]).unwrap();
+    let store = projection.projector();
+    let states = store.index_states().unwrap();
+    assert_eq!(states.boxes, IndexState::Current);
+    let IndexState::Failed(why) = &states.texts else {
+        panic!("the engine wrote the long texts: {states:?}");
+    };
+    assert!(
+        why.starts_with(ADD_TEXT) && why.contains("no encodable segment leaves"),
+        "{why}"
+    );
+    assert_eq!(store.intervals().unwrap().len(), 500);
+    assert_eq!(store.bbox(CRS, &everywhere).unwrap().len(), 500);
+    let refused = store.text("pyrite").unwrap_err();
+    assert_eq!(
+        refused,
+        DrillStoreError::IndexStale {
+            index: Index::Texts,
+            reason: Some(format!("the engine failed to write it: {why}"))
+        }
+    );
+    assert_eq!(refused.to_refusal().code, "FMINE-REF-502");
+    assert!(refused.to_string().contains(why.as_str()), "{refused}");
+
+    // Later batches apply without the text index, which stays failed until a rebuild loads it.
+    projection.catch_up(batches).unwrap();
+    let mut store = projection.into_projector();
+    assert_eq!(store.index_states().unwrap().texts, states.texts);
+    assert_eq!(store.bbox(CRS, &everywhere).unwrap().len(), 500);
+    assert_eq!(
+        store.rebuild_indexes().unwrap(),
+        IndexStates {
+            boxes: IndexState::Current,
+            texts: IndexState::Current
+        }
+    );
+    assert_eq!(store.text("pyrite").unwrap().len(), 500);
+    assert_eq!(store.text("relogged").unwrap().len(), 400);
+
+    // A rebuild from the ledger that meets the limit: the R-tree loads, the text index is left failed.
+    let mut ledger = L0Ledger::new();
+    let lease = ledger.create_cell(CELL, "node-1").unwrap();
+    let mut only_long = hole.to_vec();
+    only_long.extend((0..400).map(long));
+    commit(&mut ledger, &lease, &only_long).unwrap();
+    let mut store = DrillStore::open_in_memory().unwrap();
+    store.defer_indexes(true);
+    let mut projection = Projection::open(store).unwrap();
+    projection.catch_up(ledger.batches(CELL).unwrap()).unwrap();
+    let mut store = projection.into_projector();
+    let states = store.rebuild_indexes().unwrap();
+    assert_eq!(states.boxes, IndexState::Current);
+    assert!(
+        matches!(&states.texts, IndexState::Failed(w) if w.starts_with("load the text index")),
+        "{states:?}"
+    );
+    assert_eq!(store.bbox(CRS, &everywhere).unwrap().len(), 400);
+    assert!(matches!(
+        store.text("pyrite"),
+        Err(DrillStoreError::IndexStale {
+            index: Index::Texts,
+            reason: Some(_)
+        })
+    ));
+}
+
+/// A store that holds more intervals than its text index is kept for withholds it: at the batch that passes the
+/// limit when fed incrementally, and in a rebuild of a deferred store, which then loads no text. The R-tree and
+/// every other answer go on; text queries refuse and name INT-FSEARCH-001. A raised limit and a rebuild load it.
+#[test]
+fn test_a_text_index_past_its_limit_is_withheld_and_the_rest_goes_on() {
+    const LIMIT: u64 = 12;
+    let campaign = Campaign::new(5, 20);
+    let batches = campaign.batches();
+    let mut store = DrillStore::open_in_memory().unwrap();
+    store.limit_text_index(LIMIT);
+    let mut projection = Projection::open(store).unwrap();
+    let mut rng = Rng(0xBEEF);
+    let (mut withheld_at, mut frozen_garbage) = (None, None);
+    for (k, batch) in batches.iter().enumerate() {
+        projection.feed(batch).unwrap();
+        let want = expected(&campaign.states[k + 1]);
+        let context = format!("batch {k}");
+        let store = projection.projector();
+        assert_holds(store, &want, &context);
+        assert_bbox_answers(store, &want, &queries(&want, &mut rng), &context);
+        let held = store.intervals().unwrap().len() as u64;
+        match store.index_states().unwrap().texts {
+            IndexState::Current => {
+                assert!(withheld_at.is_none() && held <= LIMIT, "{context}: {held}");
+                assert_text_answers(store, &want, &context);
+            }
+            IndexState::Withheld(why) => {
+                assert!(held > LIMIT, "{context}: {held}");
+                withheld_at.get_or_insert(k);
+                assert!(why.contains("INT-FSEARCH-001"), "{why}");
+                // A withheld index takes no writes, so it gains no superseded rows.
+                let garbage = store.index_garbage().stale_texts;
+                assert_eq!(*frozen_garbage.get_or_insert(garbage), garbage, "{context}");
+                let refused = store.text("pyrite").unwrap_err();
+                assert_eq!(
+                    refused,
+                    DrillStoreError::IndexStale {
+                        index: Index::Texts,
+                        reason: Some(why.clone())
+                    },
+                );
+                assert_eq!(refused.to_refusal().code, "FMINE-REF-502");
+            }
+            other => panic!("{context}: {other:?}"),
+        }
+    }
+    let withheld_at = withheld_at.expect("the campaign never passed the limit");
+    assert!(withheld_at > 0, "the limit was passed by the first batch");
+
+    // A rebuild within the same limit loads no text; a raised limit and a rebuild load it.
+    let mut store = projection.into_projector();
+    let want = expected(&campaign.states[batches.len()]);
+    let states = store.rebuild_indexes().unwrap();
+    assert_eq!(states.boxes, IndexState::Current);
+    assert!(
+        matches!(states.texts, IndexState::Withheld(_)),
+        "{states:?}"
+    );
+    assert!(text_rows(&store).is_empty());
+    assert_eq!(store.index_garbage(), IndexGarbage::default());
+    assert_holds(&store, &want, "rebuilt past the limit");
+    store.limit_text_index(TEXT_INDEX_MAX_ROWS);
+    assert_eq!(
+        store.rebuild_indexes().unwrap(),
+        IndexStates {
+            boxes: IndexState::Current,
+            texts: IndexState::Current
+        }
+    );
+    assert_holds(&store, &want, "rebuilt within the limit");
+    assert_text_answers(&store, &want, "rebuilt within the limit");
+
+    // Deferred: the rebuild withholds the text index without loading it.
+    let mut store = DrillStore::open_in_memory().unwrap();
+    store.defer_indexes(true);
+    store.limit_text_index(LIMIT);
+    let mut projection = Projection::open(store).unwrap();
+    projection.catch_up(batches).unwrap();
+    let mut store = projection.into_projector();
+    let states = store.rebuild_indexes().unwrap();
+    assert_eq!(states.boxes, IndexState::Current);
+    assert!(
+        matches!(states.texts, IndexState::Withheld(_)),
+        "{states:?}"
+    );
+    assert!(text_rows(&store).is_empty());
+    assert_holds(&store, &want, "deferred, rebuilt past the limit");
+    assert_bbox_answers(
+        &store,
+        &want,
+        &queries(&want, &mut rng),
+        "deferred, rebuilt past the limit",
+    );
 }

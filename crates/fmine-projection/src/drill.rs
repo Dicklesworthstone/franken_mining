@@ -25,8 +25,24 @@
 //!   [`DrillStore::rebuild_indexes`] drops both indexes and reloads them from `drill_interval`.
 //! - **Deferred indexes.** A rebuild from the ledger can skip the indexes batch by batch
 //!   ([`DrillStore::defer_indexes`]) and load them once ([`DrillStore::rebuild_indexes`]). Until then, and if a
-//!   rebuild stopped half way, [`DrillStore::bbox`] and [`DrillStore::text`] refuse
-//!   ([`DrillStoreError::IndexStale`]).
+//!   rebuild stopped half way, an index that is not current refuses its queries ([`DrillStoreError::IndexStale`]).
+//!   Each index has its own state ([`DrillStore::index_states`]), so one that cannot be loaded leaves the other
+//!   serving.
+//! - **FTS5's limit.** fsqlite 0.5.1's FTS5 fails some segment writes ("pending hash produced no encodable segment
+//!   leaves") when the text holds few distinct words, each repeated many times. Measured: 400 rows of one
+//!   4,095-byte field repeating a word fail where 100 load; rows of the same four words fail between 10⁵ and
+//!   2.5 × 10⁵ rows. Rows that share two words and add one of 97 others load at 5 × 10⁵, so where a real
+//!   campaign's logging meets the limit is not known. A text write the engine fails marks the text index failed
+//!   with its message, and the batch is applied again without it; a text load that fails in
+//!   [`DrillStore::rebuild_indexes`] does the same. Ingest and [`DrillStore::bbox`] go on, and [`DrillStore::text`]
+//!   refuses until a rebuild loads the text index.
+//! - **The text index's limit.** Undoing a failed FTS5 statement removes its documents one by one, at a cost that
+//!   grows with the index: a single-statement load of 10⁷ intervals was still undoing itself 19 minutes into the
+//!   index load, when the run was stopped. And a `MATCH` costs time in proportion to the index (0.67 s for 100
+//!   hits at 10⁶ rows). So the store keeps a text index for at most [`TEXT_INDEX_MAX_ROWS`] intervals (10⁵, where
+//!   it was measured to load and to answer a 100-hit query in 59 ms), loads it in statements of 10,000 rows, and
+//!   past the limit withholds it ([`IndexState::Withheld`]): `text` refuses and names INT-FSEARCH-001, which serves
+//!   text at campaign scale.
 //!
 //! The store is read and written through `fsqlite::blocking::Connection` only (INT-FSQL-001 criterion 10).
 
@@ -49,11 +65,21 @@ use crate::projection::Projector;
 use boxes::{Box3, interval_box};
 
 /// The schema this module writes, recorded in `projection_meta`. A store with another is refused.
-pub const SCHEMA: &str = "fmine.projection.drill.v1";
+pub const SCHEMA: &str = "fmine.projection.drill.v2";
 /// The most rows one R-tree statement writes.
 pub const RTREE_ROWS_PER_STATEMENT: usize = 4096;
 /// The most rows one FTS5 insert writes (two parameters each).
 const TEXT_ROWS_PER_STATEMENT: usize = 512;
+/// The most intervals the store keeps a text index for, by default (module documentation).
+pub const TEXT_INDEX_MAX_ROWS: u64 = 100_000;
+/// The most rows one statement of a text-index load writes: a failed statement is undone document by document.
+const TEXT_LOAD_ROWS: i64 = if cfg!(test) { 64 } else { 10_000 };
+/// What a text write is for; a failure of it marks the text index failed.
+const ADD_TEXT: &str = "add text to the text index";
+/// The stored state of an index the engine failed to write, before its message.
+const FAILED: &str = "failed: ";
+/// The stored state of a text index past its limit, before the reason.
+const WITHHELD: &str = "withheld: ";
 
 const META_DDL: &str =
     "CREATE TABLE IF NOT EXISTS projection_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)";
@@ -103,8 +129,15 @@ pub enum DrillStoreError {
         /// The schema it records.
         found: String,
     },
-    /// The R-tree and text index do not hold every interval: [`DrillStore::rebuild_indexes`] first.
-    IndexStale,
+    /// An index does not hold every interval: it was deferred, its rebuild stopped, or (the text index) the engine
+    /// failed to write it or the store holds more intervals than it is kept for. [`DrillStore::rebuild_indexes`]
+    /// reloads it.
+    IndexStale {
+        /// Which index.
+        index: Index,
+        /// Why, for a text index that failed or is withheld.
+        reason: Option<String>,
+    },
     /// A depth, count or sequence beyond what SQLite's 64-bit integers hold.
     Range {
         /// What it was.
@@ -120,7 +153,7 @@ impl DrillStoreError {
     #[must_use]
     pub fn to_refusal(&self) -> Refusal {
         match self {
-            Self::IndexStale => Refusal::new(RefusalCode::StaleAnchor502, self.to_string()),
+            Self::IndexStale { .. } => Refusal::new(RefusalCode::StaleAnchor502, self.to_string()),
             _ => Refusal::new(RefusalCode::InputMissingOrUnreadable506, self.to_string()),
         }
     }
@@ -135,11 +168,18 @@ impl fmt::Display for DrillStoreError {
                 f,
                 "drill projection: the store holds schema '{found}', not '{SCHEMA}'; rebuild it from the ledger"
             ),
-            Self::IndexStale => write!(
-                f,
-                "drill projection: the R-tree and text index were deferred or their rebuild stopped, and they do \
-                 not hold every interval; rebuild them first"
-            ),
+            Self::IndexStale { index, reason } => {
+                write!(
+                    f,
+                    "drill projection: the {} index does not hold every interval (",
+                    index.name()
+                )?;
+                match reason {
+                    Some(why) => f.write_str(why)?,
+                    None => f.write_str("deferred, or its rebuild stopped; rebuild it first")?,
+                }
+                f.write_str(")")
+            }
             Self::Range { what, value } => write!(
                 f,
                 "drill projection: {what} {value} is past SQLite's integer range"
@@ -285,13 +325,62 @@ pub struct UnlocatedHole {
     pub reason: String,
 }
 
-/// Superseded index rows that no answer uses, kept until [`DrillStore::rebuild_indexes`].
+/// Superseded index rows that no answer uses, kept until [`DrillStore::rebuild_indexes`], which empties both
+/// counts. Exact while an index is current; a text index that failed or is withheld takes no writes and gains none.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct IndexGarbage {
     /// R-tree rows of boxes since replaced or removed.
     pub stale_boxes: u64,
     /// FTS5 rows of texts since replaced.
     pub stale_texts: u64,
+}
+
+/// One of the two indexes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Index {
+    /// The R-tree of interval boxes.
+    Boxes,
+    /// The FTS5 index of logging text.
+    Texts,
+}
+
+impl Index {
+    /// Its row in `projection_meta`.
+    const fn key(self) -> &'static str {
+        match self {
+            Self::Boxes => "boxes",
+            Self::Texts => "texts",
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Boxes => "spatial",
+            Self::Texts => "text",
+        }
+    }
+}
+
+/// The state of an index.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IndexState {
+    /// It holds a row for every box or text in `drill_interval`.
+    Current,
+    /// It was deferred, or its rebuild stopped.
+    Stale,
+    /// The engine failed to write it, with the engine's message.
+    Failed(String),
+    /// Not kept: the store holds more intervals than the text index is kept for ([`TEXT_INDEX_MAX_ROWS`]).
+    Withheld(String),
+}
+
+/// The state of each index.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IndexStates {
+    /// The R-tree.
+    pub boxes: IndexState,
+    /// The text index.
+    pub texts: IndexState,
 }
 
 /// An interval's box as the store held it before this batch.
@@ -334,6 +423,7 @@ struct Counters {
 pub struct DrillStore {
     conn: Connection,
     defer: bool,
+    text_limit: u64,
     counters: Counters,
     #[cfg(test)]
     crash_at: std::cell::Cell<Option<u64>>,
@@ -387,7 +477,8 @@ impl DrillStore {
                     .map_err(sql("create the tables"))
                     .and_then(|()| {
                         conn.execute(
-                            "INSERT INTO projection_meta(key, value) VALUES ('schema', ?1), ('indexes', 'current')",
+                            "INSERT INTO projection_meta(key, value) VALUES ('schema', ?1), ('boxes', 'current'), \
+                             ('texts', 'current')",
                             params![SCHEMA],
                         )
                         .map_err(sql("record the schema"))
@@ -411,7 +502,7 @@ impl DrillStore {
                 }
             }
         }
-        // Recreate an index a stopped rebuild dropped; the store then records the indexes as stale.
+        // Recreate an index a stopped rebuild dropped; the store then records it as stale.
         for ddl in [CREATE_BOX_INDEX, CREATE_TEXT_INDEX] {
             conn.execute_batch(ddl)
                 .map_err(sql("create an index table"))?;
@@ -453,6 +544,7 @@ impl DrillStore {
         Ok(Self {
             conn,
             defer: false,
+            text_limit: TEXT_INDEX_MAX_ROWS,
             counters,
             #[cfg(test)]
             crash_at: std::cell::Cell::new(None),
@@ -462,27 +554,98 @@ impl DrillStore {
     }
 
     /// Skip the R-tree and text index batch by batch (`true`) or keep them current (`false`, the default). While
-    /// deferred, each apply leaves the indexes stale, and [`DrillStore::bbox`] and [`DrillStore::text`] refuse
+    /// deferred, each apply leaves a current index stale, and [`DrillStore::bbox`] and [`DrillStore::text`] refuse
     /// until [`DrillStore::rebuild_indexes`]. For a rebuild from the ledger: one load of each index instead of a
     /// write per batch.
     pub const fn defer_indexes(&mut self, defer: bool) {
         self.defer = defer;
     }
 
-    /// Whether the R-tree and text index hold a row for every box and text in `drill_interval`.
+    /// Keep a text index for at most `rows` intervals ([`TEXT_INDEX_MAX_ROWS`] by default). A store that holds
+    /// more withholds it: a current text index becomes [`IndexState::Withheld`] at the batch that passes the limit,
+    /// and [`DrillStore::rebuild_indexes`] loads none. A raised limit takes effect at the next rebuild.
+    pub const fn limit_text_index(&mut self, rows: u64) {
+        self.text_limit = rows;
+    }
+
+    /// The intervals the store holds: their row ids run from 1, and no interval row is ever deleted.
+    const fn intervals_held(&self) -> i64 {
+        self.counters.next_rid - 1
+    }
+
+    /// The stored state of a text index past its limit, or `None` within it.
+    fn text_withheld(&self) -> Option<String> {
+        let held = self.intervals_held();
+        u64::try_from(held).is_ok_and(|h| h > self.text_limit).then(|| {
+            format!(
+                "{WITHHELD}the store holds {held} intervals, past the {} its text index is kept for in \
+                 fsqlite 0.5.1; text search over a full campaign is INT-FSEARCH-001's",
+                self.text_limit
+            )
+        })
+    }
+
+    /// The state of each index.
     ///
     /// # Errors
-    /// [`DrillStoreError::Sql`] if the engine fails.
+    /// [`DrillStoreError::Sql`] if the engine fails or a stored state is not one this module writes.
+    pub fn index_states(&self) -> Result<IndexStates, DrillStoreError> {
+        Ok(IndexStates {
+            boxes: self.index_state(Index::Boxes)?,
+            texts: self.index_state(Index::Texts)?,
+        })
+    }
+
+    /// Whether both indexes hold a row for every box and text in `drill_interval`.
+    ///
+    /// # Errors
+    /// As [`DrillStore::index_states`].
     pub fn indexes_are_current(&self) -> Result<bool, DrillStoreError> {
-        let state = self
+        let s = self.index_states()?;
+        Ok(s.boxes == IndexState::Current && s.texts == IndexState::Current)
+    }
+
+    fn index_state(&self, index: Index) -> Result<IndexState, DrillStoreError> {
+        let value = self
             .conn
-            .query_row(
-                "SELECT value FROM projection_meta WHERE key = 'indexes'",
-                params![],
-                |r| r.get::<_, String>(0),
-            )
-            .map_err(sql("read the index state"))?;
-        Ok(state == "current")
+            .prepare_cached("SELECT value FROM projection_meta WHERE key = ?1")
+            .and_then(|mut st| st.query_row(params![index.key()], |r| r.get::<_, String>(0)))
+            .map_err(sql("read an index state"))?;
+        match value.as_str() {
+            "current" => Ok(IndexState::Current),
+            "stale" => Ok(IndexState::Stale),
+            other => other
+                .strip_prefix(FAILED)
+                .map(|why| IndexState::Failed(why.to_string()))
+                .or_else(|| {
+                    other
+                        .strip_prefix(WITHHELD)
+                        .map(|why| IndexState::Withheld(why.to_string()))
+                })
+                .ok_or_else(|| DrillStoreError::Sql {
+                    what: "read an index state",
+                    error: format!("'{other}' is not a state this module writes"),
+                }),
+        }
+    }
+
+    /// Refuse unless `index` is current.
+    fn require(&self, index: Index) -> Result<(), DrillStoreError> {
+        match self.index_state(index)? {
+            IndexState::Current => Ok(()),
+            IndexState::Stale => Err(DrillStoreError::IndexStale {
+                index,
+                reason: None,
+            }),
+            IndexState::Failed(why) => Err(DrillStoreError::IndexStale {
+                index,
+                reason: Some(format!("the engine failed to write it: {why}")),
+            }),
+            IndexState::Withheld(why) => Err(DrillStoreError::IndexStale {
+                index,
+                reason: Some(why),
+            }),
+        }
     }
 
     /// The superseded index rows the store holds.
@@ -494,16 +657,21 @@ impl DrillStore {
         }
     }
 
-    /// Drop the R-tree and text index and reload them from `drill_interval`, without superseded rows, and mark
-    /// them current. fsqlite 0.5.1 cannot recreate a virtual table in the transaction that dropped it, so this is
-    /// two transactions: the first marks the indexes stale and drops them. A stop between the two leaves them
-    /// stale and empty, which queries refuse and this repairs.
+    /// Drop the R-tree and text index and reload them from `drill_interval`, without superseded rows, marking each
+    /// current once loaded; returns their states. fsqlite 0.5.1 cannot recreate a virtual table in the transaction
+    /// that dropped it, so this is three transactions. The first marks both stale and drops them; the second
+    /// recreates both and loads the R-tree; the third loads the text index, in statements of a bounded number of
+    /// rows. A stop between them leaves an index not yet loaded stale, which its queries refuse and this repairs. A
+    /// text load the engine fails (see the module documentation) leaves the text index failed with the engine's
+    /// message, and the R-tree current; a store past its text limit ([`DrillStore::limit_text_index`]) loads no
+    /// text index and leaves it withheld.
     ///
     /// # Errors
-    /// [`DrillStoreError::Sql`] if the engine fails.
-    pub fn rebuild_indexes(&mut self) -> Result<(), DrillStoreError> {
+    /// [`DrillStoreError::Sql`] if the engine fails anything but the text load.
+    pub fn rebuild_indexes(&mut self) -> Result<IndexStates, DrillStoreError> {
         self.in_transaction(|s| {
-            s.set_indexes("stale")?;
+            s.set_index(Index::Boxes, "stale")?;
+            s.set_index(Index::Texts, "stale")?;
             s.exec(
                 "drop the spatial index",
                 "DROP TABLE IF EXISTS drill_interval_box",
@@ -525,26 +693,50 @@ impl DrillStore {
                  FROM drill_interval WHERE bid IS NOT NULL",
                 params![],
             )?;
-            s.exec(
-                "load the text index",
-                "INSERT INTO drill_interval_text(rowid, body) SELECT tid, body FROM drill_interval",
-                params![],
-            )?;
             s.counters.stale_boxes = 0;
             s.counters.stale_texts = 0;
             s.write_counters()?;
-            s.set_indexes("current")
-        })
+            s.set_index(Index::Boxes, "current")
+        })?;
+        let loaded = self.in_transaction(|s| {
+            if let Some(why) = s.text_withheld() {
+                return s.set_index(Index::Texts, &why);
+            }
+            let (mut from, last) = (0, s.intervals_held());
+            while from < last {
+                let to = last.min(from + TEXT_LOAD_ROWS);
+                s.exec(
+                    "load the text index",
+                    "INSERT INTO drill_interval_text(rowid, body) SELECT tid, body FROM drill_interval \
+                     WHERE rid > ?1 AND rid <= ?2",
+                    params![from, to],
+                )?;
+                from = to;
+            }
+            s.set_index(Index::Texts, "current")
+        });
+        if let Err(e) = loaded {
+            self.text_failed(&e)?;
+        }
+        self.index_states()
+    }
+
+    /// Record that the engine failed to write the text index, with its message.
+    fn text_failed(&mut self, e: &DrillStoreError) -> Result<(), DrillStoreError> {
+        let state = match e {
+            DrillStoreError::Sql { what, error } => format!("{FAILED}{what}: {error}"),
+            other => format!("{FAILED}{other}"),
+        };
+        self.in_transaction(|s| s.set_index(Index::Texts, &state))
     }
 
     /// The intervals whose box meets `query` in `crs`, sorted by cell and interval id.
     ///
     /// # Errors
-    /// [`DrillStoreError::IndexStale`] while the indexes are stale; [`DrillStoreError::Sql`] if the engine fails.
+    /// [`DrillStoreError::IndexStale`] while the R-tree is not current; [`DrillStoreError::Sql`] if the engine
+    /// fails.
     pub fn bbox(&self, crs: &str, query: &Box3) -> Result<Vec<IntervalRef>, DrillStoreError> {
-        if !self.indexes_are_current()? {
-            return Err(DrillStoreError::IndexStale);
-        }
+        self.require(Index::Boxes)?;
         let (lo, hi) = (query.min(), query.max());
         let mut st = self
             .conn
@@ -595,12 +787,10 @@ impl DrillStore {
     /// The intervals whose logging text matches the FTS5 query `query`, sorted by cell and interval id.
     ///
     /// # Errors
-    /// [`DrillStoreError::IndexStale`] while the indexes are stale; [`DrillStoreError::Sql`] for a query FTS5
-    /// cannot parse, or if the engine fails.
+    /// [`DrillStoreError::IndexStale`] while the text index is not current; [`DrillStoreError::Sql`] for a query
+    /// FTS5 cannot parse, or if the engine fails.
     pub fn text(&self, query: &str) -> Result<Vec<IntervalRef>, DrillStoreError> {
-        if !self.indexes_are_current()? {
-            return Err(DrillStoreError::IndexStale);
-        }
+        self.require(Index::Texts)?;
         let mut st = self
             .conn
             .prepare_cached(
@@ -832,11 +1022,11 @@ impl DrillStore {
         }
     }
 
-    fn set_indexes(&self, state: &str) -> Result<(), DrillStoreError> {
+    fn set_index(&self, index: Index, state: &str) -> Result<(), DrillStoreError> {
         self.exec_cached(
-            "record the index state",
-            "UPDATE projection_meta SET value = ?1 WHERE key = 'indexes'",
-            params![state],
+            "record an index state",
+            "UPDATE projection_meta SET value = ?1 WHERE key = ?2",
+            params![state, index.key()],
         )
         .map(|_| ())
     }
@@ -1012,6 +1202,7 @@ impl DrillStore {
     ) -> Result<(), DrillStoreError> {
         let cell = batch.cell_id.as_str();
         let seq = int("batch seq", batch.seq)?;
+        let stale_texts = self.counters.stale_texts;
         let mut dirty_holes = BTreeSet::new();
         let mut spans: BTreeMap<i64, Span> = BTreeMap::new();
         let mut texts: Vec<(i64, String)> = Vec::new();
@@ -1090,14 +1281,29 @@ impl DrillStore {
             }
         }
         let boxes = self.locate(cell, &dirty_holes, &spans)?;
-        let current = self.indexes_are_current()?;
-        if self.defer {
-            if current {
-                self.set_indexes("stale")?;
+        let states = self.index_states()?;
+        if matches!(
+            states.texts,
+            IndexState::Failed(_) | IndexState::Withheld(_)
+        ) {
+            // A text index that no longer takes writes gains no superseded rows.
+            self.counters.stale_texts = stale_texts;
+        }
+        if states.boxes == IndexState::Current {
+            if self.defer {
+                self.set_index(Index::Boxes, "stale")?;
+            } else {
+                self.write_rtree(&boxes)?;
             }
-        } else if current {
-            self.write_rtree(&boxes)?;
-            self.write_text(&texts)?;
+        }
+        if states.texts == IndexState::Current {
+            if let Some(why) = self.text_withheld() {
+                self.set_index(Index::Texts, &why)?;
+            } else if self.defer {
+                self.set_index(Index::Texts, "stale")?;
+            } else {
+                self.write_text(&texts)?;
+            }
         }
         self.write_counters()?;
         self.exec_cached(
@@ -1246,7 +1452,7 @@ impl DrillStore {
                 args.push(tid);
                 args.push(body);
             }
-            self.exec("add text to the text index", &text, args.as_slice())?;
+            self.exec(ADD_TEXT, &text, args.as_slice())?;
         }
         Ok(())
     }
@@ -1256,7 +1462,15 @@ impl Projector for DrillStore {
     type Error = DrillStoreError;
 
     fn apply(&mut self, batch: &DeltaBatch, mark: &HighWaterMark) -> Result<(), DrillStoreError> {
-        self.in_transaction(|s| s.apply_batch(batch, mark))
+        match self.in_transaction(|s| s.apply_batch(batch, mark)) {
+            // The engine cannot write this text (module documentation): record that, then apply the batch without
+            // the text index.
+            Err(e @ DrillStoreError::Sql { what: ADD_TEXT, .. }) => {
+                self.text_failed(&e)?;
+                self.in_transaction(|s| s.apply_batch(batch, mark))
+            }
+            done => done,
+        }
     }
 
     fn stored_marks(&self) -> Result<BTreeMap<String, HighWaterMark>, DrillStoreError> {
