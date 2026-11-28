@@ -702,6 +702,7 @@ dependencies = [
  "fmine-optimize",
  "fmine-plant",
  "fmine-public",
+ "fmine-qaqc",
  "fmine-registry",
  "fmine-runtime",
  "fmine-time",

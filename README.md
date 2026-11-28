@@ -322,6 +322,79 @@ JSON and Markdown retain source SHA-256, sample line locators, declarations, res
 Assumed/Internal/uncalibrated Claim. These fixed-batch checks do not establish an anytime-valid
 alarm, a complete assay QA/QC pass, custody, assay release or execution authority.
 
+## Assess blank contamination and duplicate precision
+
+```bash
+fmine drill blanks --input tests/drill/blank_batch.toml --format markdown
+fmine drill duplicates --input tests/drill/duplicate_batch.toml --json
+```
+
+DESIGN (BD-167, BD-284): these commands connect declared assay observations to the existing
+`fmine-qaqc` engine. Each bounded worksheet names the analyte, method, mass-fraction unit, dry or wet
+basis, evidence lane, source description, omitted uncertainty, and policy ID, version and source.
+The policies and source descriptions remain unverified declarations. Every row retains its source
+line, and the report and diagnostic Claim bind the complete source bytes.
+
+Blank policies explicitly choose a detection-limit multiple, carryover **AND**, or carryover **OR**.
+The preceding sample and grade are declared explicitly; laboratory processing order is not inferred.
+Measured values, `<DL`, `>UL` and missing predecessors are assessed over their admissible ranges.
+Results distinguish definite passes, confirmed contamination and indeterminate cases. Confirmed and
+possible failure rates use every supplied blank in their denominator, with separate laboratory counts.
+The [eight-row synthetic fixture](tests/drill/blank_batch.toml) gives 3 passes, 1 confirmed failure and
+4 indeterminate results under its AND rule; switching the declared rule to OR gives 2, 4 and 2.
+
+Duplicates are grouped by preparation stage and grade band within one declared lab and measurand.
+Both sample masses and sample types are required. The report retains every pair, including censored,
+zero/zero and mismatched-support exclusions; an all-censored group is unavailable. CV_AVR%, its derived
+HARD/AMPD views and empirical pair summaries are reported separately. Thompson–Howarth requires at
+least 50 usable pairs and an identifiable fit, retains its actual fitted/bin denominators, and is
+labelled “assumes normal errors; optimistic.” Missing preparation stages remain unidentified. Stage
+differences assume comparable populations and do not establish a causal geological/sampling nugget split.
+
+## Replay sequential CRM monitoring
+
+```bash
+fmine drill monitor --input tests/drill/crm_monitor.toml --format markdown
+```
+
+DESIGN (BD-169, BD-283): a declared CRM stream now reaches the existing sequential e-process and
+pattern monitors. The [synthetic worksheet](tests/drill/crm_monitor.toml) names a fixed external
+reference, certified SD basis, policy version and all monitor parameters. Each ordered observation
+produces a source-linked prefix result, log wealth and any new alarm. Two successive results beyond
+2 SD, four beyond 1 SD on one side, sign imbalance and dispersion collapse remain separate findings.
+Dispersion collapse is an integrity-review alarm, not a recalibration instruction.
+
+Only the e-process threshold has an anytime-valid interpretation, conditional on the declared independent
+Gaussian null and a policy fixed before observations. Repeated pattern and dispersion checks have no
+combined false-alarm guarantee. Source chronology, certificate authenticity and policy preregistration
+are not verified. These diagnostic commands leave their Claims Assumed, Internal and uncalibrated;
+they write no assay release, InvestigationCase, custody or authority records.
+
+## Fit left-censored assay populations without DL substitution
+
+```bash
+fmine drill censored --input tests/drill/censored_assays.toml --format markdown
+```
+
+DESIGN (BD-168): the existing left-censored lognormal maximum-likelihood and Regression on Order
+Statistics (ROS) engines now accept a source-bound assay worksheet. The declaration names one
+population, analyte, method, lab, mass-fraction unit and dry or wet basis. Positive measured values
+and individual `<DL` limits remain in their original rows; neither method replaces raw assays.
+At least two uncensored positive observations are required, and right-censored inputs are refused.
+
+The report compares both methods with their actual observation counts, fitted summaries and
+diagnostics. A failed method retains its typed refusal beside the successful method; if both fail,
+the command refuses. ROS reports modeled values exceeding their own detection limits, and positive
+model quantities that would underflow to zero are refused. Tiny but representable dispersion is
+preserved. [The synthetic fixture](tests/drill/censored_assays.toml) is checked against an independent
+normal log-likelihood optimization and independently calculated ROS plotting positions.
+
+The assumed lognormal distribution is positive and untruncated, so it can place probability above
+physical mass fraction one; that probability is reported explicitly for each fit. Distribution
+quantiles are descriptive model spread, not estimation confidence intervals. These are Assumed,
+Internal, uncalibrated diagnostics, with source hash and row identity, not a resource estimate or
+permission to release assay results.
+
 ## Check the remainder grade of a headline drill interval
 
 ```bash

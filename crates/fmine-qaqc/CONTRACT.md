@@ -24,10 +24,15 @@ Corebox QA/QC kernel (`BD-167`, `BD-168`, `BD-169`, `BD-282`, `BD-283`, `BD-284`
 ## 4. Invariants
 - **No anonymous CRM SD basis (`BD-282`, E364–E366):** every CRM rule explicitly names `SdBasis` (`sigma_c`, `sigma_l`, or `running_sw`) and always emits `BiasInterval` beside pass/fail.
 - **No silent method merge (`PO-CORE-3`):** `insertion::evaluate_campaign_qaqc` refuses mixed analytes or `AssayMethod`s (`FMINE-REF-105`).
-- **No DL/2 substitution (`G-CENS`, §12.2):** `censored::refuse_dl_substitution` refuses any DL fraction; CRM evaluation refuses censored results; blank evaluation preserves `<DL` as `PassBelowDetection`; duplicate evaluation excludes censored pairs transparently.
+- **No DL/2 substitution (`G-CENS`, §12.2):** `censored::refuse_dl_substitution` refuses any DL fraction; CRM evaluation refuses censored results; blank evaluation preserves the full physical interval (`[0,DL)` or `(UL,1]`) and can pass, fail or remain indeterminate; duplicate evaluation excludes valid censored pairs transparently after validating their limits.
+- **Positive fitted values remain positive (DESIGN, `BD-168`):** ROS refuses an imputed positive order statistic that underflows to zero, even when the aggregate summary would remain positive. Both fits refuse nonfinite or lost positive back-transformed moments. ROS normalizes values before calculating sample dispersion, preserving a representable SD even when squaring the raw units would underflow (`censored_limits` regression suite). These descriptive fits do not overwrite raw assays or provide estimation confidence intervals; the fitted lognormal is untruncated and may assign probability above a physical mass fraction of one.
+- **ROS plotting-position accuracy (DESIGN):** normal scores start from the core Acklam inverse and take up to three local Newton corrections against the existing normal CDF/PDF. The lower tail is used on both sides for numerical symmetry. This avoids carrying the initial inverse approximation's error into regression slopes while leaving the pinned core functions unchanged (`censored_limits::ros_normal_score_regression_recovers_independent_normal_decile_values`).
+- **Blank uncertainty is retained (DESIGN, `BD-167`):** contamination rules combine detection-limit and preceding-grade thresholds with the explicitly selected AND (`max`) or OR (`min`) semantics. Censored preceding assays retain their interval and open endpoint; a missing predecessor is unknown over `[0,1]` and never removes a rule condition. `BlankVerdict` retains the original blank and predecessor, plus threshold bounds and exclusive endpoints. `BlankBatchEvaluation` reports `pass_count`, `failure_count`, `indeterminate_count`, the lower confirmed failure rate over all blanks, and `possible_failure_rate_pct` including unknowns; an empty batch has no rate. The campaign reports `blank_indeterminate` separately and does not promote uncertainty into a definite batch failure (`blank_bounds` regression suite).
 - **Dispersion collapse is integrity scope (`BD-283`, E368):** `MonitorKind::DispersionCollapse` unconditionally emits `AlarmScope::Integrity`, never `CalibrationOrBias`.
 - **Anytime-valid e-process (`BD-169`, GATE-CORE-02):** `CrmSequentialMonitor` feeds centred standard-normal PIT scores `Φ(z) - 0.5 ∈ [-0.5, 0.5]` into log-wealth `fmine_numerics::eproc::ScoreBettingEProcess(-0.5, 0.5, 1/12, 0.75, alpha)`, bounding null false alarms by Ville's inequality (`<= alpha`) without overflow/underflow over arbitrary horizons.
+- **Finite, atomic monitor updates (DESIGN):** standardization refuses nonfinite residuals and underflow of nonzero deviations before advancing any state. Rolling dispersion scales finite residuals before taking squared deviations, so a large finite spread cannot become a spurious zero-variance integrity alarm; an unrepresentable spread refuses the observation and preserves the accepted prefix (`monitor_limits::refused_standardization_preserves_every_monitor_state`, `monitor_limits::enormous_finite_dispersion_is_not_silently_reported_as_collapse`, `monitor_limits::overflowing_dispersion_is_refused_before_advancing_the_prefix`). Only the e-process carries the conditional anytime false-alarm bound; repeated pattern, sign and dispersion checks have no combined or anytime false-alarm guarantee.
 - **Duplicate mass & identifiability (`BD-284`, E374, C4 P12):** quarter-core duplicates of half-core originals or mass-mismatched duplicates are flagged/refused (`FMINE-REF-102`); missing field duplicates report `FieldDuplicateAbsent`; duplicate variance exceeding variogram nugget refuses (`FMINE-REF-104`) rather than clamping geological nugget negative.
+- **Duplicate denominators and stage attribution (DESIGN):** `DuplicatePrecisionReport.pairs` accounts for every input index and source pair, including censored, both-zero and mass/support-mismatched exclusions. Invalid measurements, censor bounds and supplied masses refuse before exclusion; absent mass or type metadata remains `mass_support_verified = false` and contributes to `unverified_support_pairs`. A precision group requires one declared stage and grade band; stage decomposition requires one grade band and retains `unavailable_stages`. Missing components yield `IncompleteStages`; a field increment is computed only as field minus coarse-reject variance. Negative incremental variances are reported without clamping. Thompson–Howarth fits disclose `fitted_pairs` and `unbinned_pairs`, normalize grades before regression, and remain unavailable when their slope is unidentified or nonfinite (`duplicate_integrity` regression suite).
 - **Gy calibration validity (`BD-284`, E359–E363):** uncalibrated `Assumed` constants (`K = 470, α = 1.5`) render `NomogramEvidence::Speculative`; evaluating outside `[valid_grade_min, valid_grade_max]` renders `NomogramValidity::OutsideValidity`; `< 30` increments flags the stage.
 - **Thompson–Howarth discipline (`E369–E370`):** omitted below `N = 50` pairs and always labelled `"assumes normal errors; optimistic"`.
 
@@ -69,7 +74,7 @@ Derived analytical QA/QC diagnostics and error-model parameters (layer L0/Corebo
 - `crm::{SdBasis, CrmTestKind, ConsecutiveBiasRule, GradeReassayWindow, SiteCrmRule, CrmCertificateSpec, CrmObservation, CrmBatchInput, CrmPointStatus, CrmPointVerdict, BiasInterval, CanmetBatchDetail, CrmBatchEvaluation, MultiBasisComparison, MultiBasisConfig, evaluate_crm_batch, evaluate_crm_all_bases}`
 - `insertion::{InsertionDenominator, TargetBasis, RateBandPct, InsertionTargetSpec, AchievedRate, InsertionRateSummary, BlankFailureMode, BlankCarryoverThresholds, SiteBlankRule, PrecedingSampleGrade, BlankObservation, BlankStatus, BlankVerdict, BlankBatchEvaluation, ControlAbsentPeriod, LabQaqcSummary, FailedBatchCascade, CampaignQaqcInput, CampaignQaqcReport, compute_insertion_rates, evaluate_campaign_qaqc}`
 - `monitors::{AlarmScope, MonitorKind, MonitorAlarm, CrmStreamKey, CrmReferenceParams, CrmMonitorConfig, CrmMonitorSnapshot, CrmStreamValue, CrmSequentialMonitor}`
-- `duplicates::{THOMPSON_HOWARTH_CAVEAT, THOMPSON_HOWARTH_MIN_PAIRS, GY_DEFAULT_K, GY_DEFAULT_ALPHA, GY_SAFETY_LINE_REL_VAR, GY_MIN_INCREMENTS, DuplicatePair, DuplicatePolicy, ThompsonHowarthEstimate, DuplicatePrecisionReport, StageDecompositionStatus, StageVarianceDecomposition, PrecisionReferenceLevel, evaluate_duplicates, decompose_duplicate_stages, reference_precision_policy_defaults, GyGeneralInput, gy_general_fse_variance, GyCalibrationMethod, GyGradeWindow, GyCalibratedConstants, ThirtyPiecesInput, ThirtyPiecesDiameter, ThirtyPiecesCalibration, calibrate_thirty_pieces, GySamplingStage, GyNomogramRequest, NomogramEvidence, NomogramValidity, GyStageOutcome, GyNomogramReport, evaluate_gy_nomogram, InformationOption, NuggetSplitInput, NuggetSplitDecision, evaluate_nugget_split}`
+- `duplicates::{THOMPSON_HOWARTH_CAVEAT, THOMPSON_HOWARTH_MIN_PAIRS, GY_DEFAULT_K, GY_DEFAULT_ALPHA, GY_SAFETY_LINE_REL_VAR, GY_MIN_INCREMENTS, DuplicatePair, DuplicatePolicy, DuplicatePairStatus, DuplicatePairVerdict, ThompsonHowarthEstimate, DuplicatePrecisionReport, StageDecompositionStatus, StageVarianceDecomposition, PrecisionReferenceLevel, evaluate_duplicates, decompose_duplicate_stages, reference_precision_policy_defaults, GyGeneralInput, gy_general_fse_variance, GyCalibrationMethod, GyGradeWindow, GyCalibratedConstants, ThirtyPiecesInput, ThirtyPiecesDiameter, ThirtyPiecesCalibration, calibrate_thirty_pieces, GySamplingStage, GyNomogramRequest, NomogramEvidence, NomogramValidity, GyStageOutcome, GyNomogramReport, evaluate_gy_nomogram, InformationOption, NuggetSplitInput, NuggetSplitDecision, evaluate_nugget_split}`
 - `censored::{SubstitutionAttempt, refuse_dl_substitution, CensoredDataset, LognormalMleFit, RosFit, fit_censored_lognormal_mle, fit_censored_ros}`
 
 ## 12. Proof obligations
@@ -77,14 +82,35 @@ Derived analytical QA/QC diagnostics and error-model parameters (layer L0/Corebo
   - `qaqc_known_answers::test_insertion_rates_denominators_control_absent_and_campaign_cascade`
   - `qaqc_known_answers::test_blanks_carlin_and_vs_turquoise_ridge_or_and_g_cens`
   - `qaqc_known_answers::test_po_core_3_refuses_mixed_methods_and_disaggregates_by_lab`
+- Censored blank controls (`tests/blank_bounds.rs`):
+  - `blank_bounds::censored_blanks_are_classified_against_the_policy_without_substitution`
+  - `blank_bounds::censored_predecessors_keep_and_or_rules_and_open_endpoints_distinct`
+  - `blank_bounds::missing_predecessors_are_unknown_and_never_silently_remove_a_rule_condition`
+  - `blank_bounds::physical_upper_bound_can_prove_censored_pass_and_empty_batches_have_no_rate`
+  - `blank_bounds::invalid_ranges_and_lost_positive_thresholds_refuse`
 - `BD-282` (`tests/qaqc_known_answers.rs`):
   - `qaqc_known_answers::test_fx2_crm_multi_basis_canmet_and_bias_interval`
   - `qaqc_known_answers::test_site_crm_rules_kibali_loulo_ngm_and_grade_reassay_windows`
 - `BD-284` (`tests/qaqc_known_answers.rs`):
   - `qaqc_known_answers::test_duplicates_cv_avr_hard_ampd_mass_guard_thompson_howarth_and_field_absent`
   - `qaqc_known_answers::test_gy_fx1_calibration_nomogram_validity_and_nugget_split`
+- Duplicate integrity controls (`tests/duplicate_integrity.rs`):
+  - `duplicate_integrity::precision_keeps_every_exclusion_and_marks_missing_support_unverified`
+  - `duplicate_integrity::invalid_values_cannot_hide_behind_censoring_or_support_exclusions`
+  - `duplicate_integrity::groups_refuse_mixed_stages_bands_and_duplicate_identity`
+  - `duplicate_integrity::stage_attribution_requires_its_actual_components_and_retains_unavailable_stages`
+  - `duplicate_integrity::thompson_howarth_is_scale_invariant_and_reports_the_fitted_denominator`
+  - `duplicate_integrity::strict_support_policy_and_zero_data_never_return_a_fabricated_precision`
 - `BD-168` (`tests/qaqc_known_answers.rs`):
   - `qaqc_known_answers::test_censored_mle_and_ros_recover_seeded_lognormal_and_refuse_dl_half`
+- Censored numeric range controls (`tests/censored_limits.rs`):
+  - `censored_limits::ros_refuses_a_positive_modeled_order_statistic_that_underflows_to_zero`
+  - `censored_limits::ros_keeps_representable_small_sample_dispersion_without_squaring_raw_units`
+  - `censored_limits::ros_normal_score_regression_recovers_independent_normal_decile_values`
 - `BD-169`, `BD-283`, `GATE-CORE-02` (`tests/gate_core_02.rs`):
   - `gate_core_02::test_gate_core_02_eprocess_null_fpr_and_1sd_drift_detection_delay`
   - `gate_core_02::test_gate_core_02_dispersion_collapse_integrity_alarm_and_pattern_monitors`
+- Numerical monitor regressions (`tests/monitor_limits.rs`):
+  - `monitor_limits::refused_standardization_preserves_every_monitor_state`
+  - `monitor_limits::enormous_finite_dispersion_is_not_silently_reported_as_collapse`
+  - `monitor_limits::overflowing_dispersion_is_refused_before_advancing_the_prefix`

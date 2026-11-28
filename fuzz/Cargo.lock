@@ -109,6 +109,7 @@ dependencies = [
  "fmine-optimize",
  "fmine-plant",
  "fmine-public",
+ "fmine-qaqc",
  "fmine-registry",
  "fmine-runtime",
  "fmine-time",
@@ -322,6 +323,17 @@ dependencies = [
  "fmine-registry",
  "fmine-time",
  "fmine-units",
+]
+
+[[package]]
+name = "fmine-qaqc"
+version = "0.1.0"
+dependencies = [
+ "fmine-claim",
+ "fmine-core",
+ "fmine-drill",
+ "fmine-evidence",
+ "fmine-numerics",
 ]
 
 [[package]]

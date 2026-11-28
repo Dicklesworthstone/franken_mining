@@ -37,6 +37,33 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
   The synthetic command controls cover hand-worked grades and censor bounds, all four residual
   policies, missing coverage, support/method/unit refusals, source identity and spatial locations.
 
+- DESIGN (BD-167, BD-284). `drill_quality` exposes `drill blanks` and `drill duplicates` over
+  `fmine-qaqc`. Bounded source declarations retain one analyte/method/unit/basis, explicit versioned
+  policy, all input rows, source hashes and diagnostic Claims. Blank rules preserve censor bounds,
+  unknown predecessors and AND/OR semantics, with definite pass/failure/indeterminate outcomes and
+  confirmed/possible rates over every supplied blank. Duplicates group by stage and grade band;
+  required masses/types, exclusion identities, actual fit denominators, unavailable groups and
+  incomplete stage decomposition remain visible. No implicit conversion or DL/2 substitution occurs.
+  Native synthetic tests cover known answers, raw-row identity, exclusions, censoring, thresholds,
+  source/policy changes, deterministic output and malformed-input refusal.
+
+- DESIGN (BD-169, BD-283). `drill_monitor` exposes `drill monitor` over the sequential CRM engine.
+  One fixed external reference and explicit policy replay 1..4096 ordered observations. Each prefix
+  retains source line, sample identity, log wealth and new alarms; dispersion collapse is integrity
+  scope. Only the e-process has an anytime-valid threshold under its declared independent Gaussian
+  null; repeated pattern/sign/dispersion tests have no familywise guarantee. The source declaration
+  does not verify chronology, certificate authenticity or policy preregistration, and no durable
+  investigation or monitor state is written. Native tests cover prefix replay and known alarm steps.
+
+- DESIGN (BD-168). `drill_censored` exposes `drill censored` over the existing lognormal MLE and
+  ROS engines. Positive measured values and individual below-detection limits retain raw tokens,
+  source rows and a common declared population/lab/analyte/method/unit/basis. Both methods report
+  their outcome independently; partial comparisons retain the refused method and warn, while two
+  failed fits refuse the command. The report includes untruncated fitted mass above one and keeps
+  descriptive quantiles separate from absent estimation intervals. Lost positive model quantities
+  refuse; tiny representable ROS dispersion remains positive. Native tests use independent likelihood
+  and ROS references, exact uncensored moments, partial failure and numerical boundary controls.
+
 - DESIGN (BD-167, BD-282). `drill_qaqc` exposes `drill qaqc --input <batch.toml>` over the numerical
   CRM engine. A bounded `fmine.crm-batch.v1` declaration supplies CRM, lab, analyte, method, unit,
   certificate-source label, evidence lane, omitted uncertainty, certified mean, all three named SD
@@ -355,8 +382,8 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     completed cost outcomes known strictly before that approval enter the lower-median actual/approval
     ratio. The held-out error uses the reported comparable actual. Selection, original scope and price
     normalization remain the submitter's declarations. The ratio has no calibration claim.
-- **LOC budget:** 54,000 planned / 66,000 ceiling
-- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "doctor", "drill", "drill_qaqc", "triage", "geo", "investment", "pit", "plan_certificate", "recon", "repair", "robot", "verb_catalog", "schedule", "lane_cutoff", "route_blend", "plant", "worksheet_input", "html", "decision", "capital", "capital_return", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "spatial", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables", "screen_target", "waterfall"]`
+- **LOC budget:** 54,000 planned / 72,000 ceiling
+- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "doctor", "drill", "drill_qaqc", "drill_quality", "drill_monitor", "drill_censored", "triage", "geo", "investment", "pit", "plan_certificate", "recon", "repair", "robot", "verb_catalog", "schedule", "lane_cutoff", "route_blend", "plant", "worksheet_input", "html", "decision", "capital", "capital_return", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "spatial", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables", "screen_target", "waterfall"]`
 
 - DESIGN (BD-225, plan §§17.8/22.3/23.4): `decide production --manifest <comparison.toml>`
   compares two to sixteen complete source-bound production/valuation alternatives plus one common

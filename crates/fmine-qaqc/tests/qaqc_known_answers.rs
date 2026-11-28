@@ -1166,7 +1166,8 @@ fn test_fresh_eyes_hardening_regressions() {
     // 2. Over-limit preceding routine sample (`AboveUpper { limit: 10 ppm }`):
     //    Under Carlin "and" (abs = 0.02 ppm, 1% carryover => 1% of >10 ppm is >0.10 ppm):
     //    - Blank = 0.05 ppm is guaranteed <= 1% of preceding -> PASSES.
-    //    - Blank = 0.15 ppm exceeds both 0.02 ppm and 1% of 10 ppm -> conservatively FAILS.
+    //    - Blank = 0.15 ppm might exceed 1% of the true preceding grade, but that grade is unknown:
+    //      at 11 ppm it fails, while at 20 ppm it passes. The result is INDETERMINATE.
     let samples = vec![
         routine_sample("S-OVL", "I-1", SampleType::HalfCore, 2000.0),
         qc_sample("QC-B-PASS"),
@@ -1241,8 +1242,46 @@ fn test_fresh_eyes_hardening_regressions() {
     );
     assert_eq!(
         ovl_rep.per_lab["ALS"].blank_evaluation.verdicts[1].status,
-        BlankStatus::FailContamination
+        BlankStatus::Indeterminate
     );
+    assert_eq!(ovl_rep.per_lab["ALS"].blank_indeterminate, 1);
+    assert_eq!(ovl_rep.per_lab["ALS"].blank_evaluation.pass_count, 1);
+    assert!(ovl_rep.failed_batches.is_empty());
+
+    // A <DL predecessor carries its range into the campaign instead of becoming a missing grade.
+    let mut below_results = results.clone();
+    below_results[0].value = AssayValue::BelowDetection { limit: 0.5 };
+    below_results[1].value = AssayValue::Measured {
+        mass_fraction: 0.125,
+    };
+    below_results[2].value = AssayValue::Measured {
+        mass_fraction: 0.1875,
+    };
+    let below_rep = evaluate_campaign_qaqc(&CampaignQaqcInput {
+        analyte: "Au".to_string(),
+        method: AssayMethod::FireAssayAas,
+        samples: &samples,
+        insertions: &insertions,
+        results: &below_results,
+        insertion_targets: InsertionTargetSpec::textbook_policy_default(),
+        crm_rule: SiteCrmRule::kibali_v1(SdBasis::CertifiedWithinLabSigmaC),
+        blank_rule: SiteBlankRule::carlin_and_v1(BlankCarryoverThresholds {
+            abs_threshold: 0.125,
+            carryover_fraction: 0.5,
+        }),
+    })
+    .expect("below-detection predecessor remains bounded");
+    let below_eval = &below_rep.per_lab["ALS"].blank_evaluation;
+    assert_eq!(below_eval.pass_count, 1);
+    assert_eq!(below_eval.indeterminate_count, 1);
+    assert_eq!(below_eval.failure_count, 0);
+    assert_eq!(below_eval.verdicts[1].threshold_upper, 0.25);
+    assert!(below_eval.verdicts[1].threshold_upper_exclusive);
+    assert_eq!(
+        below_eval.verdicts[1].preceding_sample_grade,
+        Some(PrecedingSampleGrade::BelowDetection { limit: 0.5 })
+    );
+    assert!(below_rep.failed_batches.is_empty());
 
     // 3. compute_insertion_rates refuses dangling duplicate original_sample_id, self-duplicate, and
     //    CRM placed on non-QcMaterial core sample.
