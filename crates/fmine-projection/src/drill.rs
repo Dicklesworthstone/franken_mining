@@ -1,7 +1,10 @@
 //! The fsqlite drillhole projection (`BD-121`, plan §26.1 and §27.4): every drill record's current version in
 //! relational tables, each logging interval's 3-D box in an R-tree, and its logging text in FTS5.
 //!
-//! - **Tables.** `drill_record` holds the current version of each `drill/<kind>/<id>` key with its version count.
+//! - **Tables.** `drill_record` holds the current version of each `drill/<kind>/<id>` key with its version count
+//!   and the record it hangs from (`parent_id`): the hole of a collar, survey or interval, a sample's first
+//!   interval and a result's sample. [`DrillStore::hole_records`] reads one hole's records through it, its
+//!   samples and their results included, with no table of their own to keep in step when an interval moves.
 //!   `drill_hole` holds each collar's CRS and whether its trace could be desurveyed. `drill_interval` holds each
 //!   logging interval: its hole, depths, text and box. `projection_mark` holds each cell's high-water mark.
 //! - **Both or neither.** [`Projector::apply`] writes a batch's effect and its mark in one transaction and rolls it
@@ -53,7 +56,10 @@ use std::path::Path;
 
 use fmine_core::hash::Digest32;
 use fmine_drill::desurvey::{Trace, desurvey};
-use fmine_drill::records::{DrillRecord, Interval, RecordKind, RecordVersion, decode_version};
+use fmine_drill::records::{
+    AssayResult, Collar, DrillRecord, Interval, RecordKind, RecordVersion, Sample, Survey,
+    decode_version,
+};
 use fmine_drill::store::{KEY_PREFIX, parse_key, record_key};
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_ledger::batch::{DeltaBatch, DeltaKind};
@@ -64,7 +70,7 @@ use crate::projection::Projector;
 use boxes::{Box3, interval_box};
 
 /// The schema this module writes, recorded in `projection_meta`. A store with another is refused.
-pub const SCHEMA: &str = "fmine.projection.drill.v2";
+pub const SCHEMA: &str = "fmine.projection.drill.v3";
 /// The most rows one R-tree statement writes.
 pub const RTREE_ROWS_PER_STATEMENT: usize = 4096;
 /// The most rows one FTS5 insert writes (two parameters each).
@@ -92,9 +98,9 @@ const DDL: &str = "
 CREATE TABLE IF NOT EXISTS projection_mark(cell_id TEXT PRIMARY KEY, applied INTEGER NOT NULL, head BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS projection_counter(key TEXT PRIMARY KEY, value INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS drill_record(cell_id TEXT NOT NULL, key TEXT NOT NULL, kind TEXT NOT NULL,
-  record_id TEXT NOT NULL, hole_id TEXT, versions INTEGER NOT NULL, seq INTEGER NOT NULL, payload BLOB NOT NULL,
+  record_id TEXT NOT NULL, parent_id TEXT, versions INTEGER NOT NULL, seq INTEGER NOT NULL, payload BLOB NOT NULL,
   PRIMARY KEY(cell_id, key));
-CREATE INDEX IF NOT EXISTS drill_record_hole ON drill_record(cell_id, hole_id, kind);
+CREATE INDEX IF NOT EXISTS drill_record_parent ON drill_record(cell_id, parent_id, kind);
 CREATE TABLE IF NOT EXISTS drill_hole(cell_id TEXT NOT NULL, hole_id TEXT NOT NULL, crs TEXT NOT NULL,
   located INTEGER NOT NULL, reason TEXT, PRIMARY KEY(cell_id, hole_id));
 CREATE TABLE IF NOT EXISTS drill_interval(rid INTEGER PRIMARY KEY, cell_id TEXT NOT NULL, interval_id TEXT NOT NULL,
@@ -243,11 +249,13 @@ fn body(iv: &Interval) -> String {
 }
 
 /// The hole a record belongs to, for the records that have one.
-fn hole_of(record: &DrillRecord) -> Option<&str> {
+fn parent_of(record: &DrillRecord) -> Option<&str> {
     match record {
         DrillRecord::Collar(c) => Some(&c.hole_id),
         DrillRecord::Survey(s) => Some(&s.hole_id),
         DrillRecord::Interval(i) => Some(&i.hole_id),
+        DrillRecord::Sample(s) => s.interval_ids.first().map(String::as_str),
+        DrillRecord::AssayResult(r) => Some(&r.sample_id),
         _ => None,
     }
 }
@@ -317,6 +325,21 @@ pub struct StoredRecord {
     pub seq: u64,
     /// The current version.
     pub version: RecordVersion,
+}
+
+/// One hole's current records ([`DrillStore::hole_records`]), each list sorted by id.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HoleRecords {
+    /// Its collar, if one is recorded.
+    pub collar: Option<Collar>,
+    /// Its survey stations.
+    pub surveys: Vec<Survey>,
+    /// Its logging intervals.
+    pub intervals: Vec<Interval>,
+    /// The samples whose first interval is one of `intervals`.
+    pub samples: Vec<Sample>,
+    /// The results of those samples.
+    pub results: Vec<AssayResult>,
 }
 
 /// A collared hole the store could not desurvey.
@@ -409,7 +432,7 @@ struct StoredInterval {
 /// second version in the same batch finds what a read of its row would.
 #[derive(Default)]
 struct Stored {
-    /// Versions and hole of each stored record, by key.
+    /// Versions and parent of each stored record, by key.
     records: BTreeMap<String, (i64, Option<String>)>,
     /// Each stored interval, by interval id.
     intervals: BTreeMap<String, StoredInterval>,
@@ -438,7 +461,7 @@ struct Span {
 struct NewRecord<'a> {
     kind: &'static str,
     record_id: &'a str,
-    hole_id: Option<String>,
+    parent_id: Option<String>,
     versions: i64,
     seq: i64,
     payload: &'a [u8],
@@ -945,6 +968,123 @@ impl DrillStore {
         Ok(keys)
     }
 
+    /// The current records of `hole_id`: its collar, surveys and intervals; the samples whose first interval is one
+    /// of those intervals; and the results of those samples. A sample is found through its first interval and a
+    /// result through its sample, so an interval that moves to another hole takes them with it.
+    ///
+    /// # Errors
+    /// [`DrillStoreError::Record`] for a payload that does not decode or holds another kind than its key names;
+    /// [`DrillStoreError::Sql`] if the engine fails.
+    pub fn hole_records(
+        &self,
+        cell_id: &str,
+        hole_id: &str,
+    ) -> Result<HoleRecords, DrillStoreError> {
+        let mut out = HoleRecords::default();
+        let on_hole = [RecordKind::Collar, RecordKind::Survey, RecordKind::Interval];
+        for (key, payload) in self.children(cell_id, &[hole_id], &on_hole)? {
+            match decode(&key, &payload)?.record {
+                DrillRecord::Collar(c) => out.collar = Some(c),
+                DrillRecord::Survey(s) => out.surveys.push(s),
+                DrillRecord::Interval(iv) => out.intervals.push(iv),
+                other => {
+                    return Err(DrillStoreError::Record {
+                        key,
+                        error: format!("the payload is {} '{}'", other.kind().code(), other.id()),
+                    });
+                }
+            }
+        }
+        let interval_ids: Vec<&str> = out
+            .intervals
+            .iter()
+            .map(|iv| iv.interval_id.as_str())
+            .collect();
+        for (key, payload) in self.children(cell_id, &interval_ids, &[RecordKind::Sample])? {
+            match decode(&key, &payload)?.record {
+                DrillRecord::Sample(s) => out.samples.push(s),
+                _ => {
+                    return Err(DrillStoreError::Record {
+                        key,
+                        error: "a sample key holds another record".to_string(),
+                    });
+                }
+            }
+        }
+        let sample_ids: Vec<&str> = out.samples.iter().map(|s| s.sample_id.as_str()).collect();
+        for (key, payload) in self.children(cell_id, &sample_ids, &[RecordKind::AssayResult])? {
+            match decode(&key, &payload)?.record {
+                DrillRecord::AssayResult(r) => out.results.push(r),
+                _ => {
+                    return Err(DrillStoreError::Record {
+                        key,
+                        error: "a result key holds another record".to_string(),
+                    });
+                }
+            }
+        }
+        out.surveys.sort_by(|a, b| a.survey_id.cmp(&b.survey_id));
+        out.intervals
+            .sort_by(|a, b| a.interval_id.cmp(&b.interval_id));
+        out.samples.sort_by(|a, b| a.sample_id.cmp(&b.sample_id));
+        out.results.sort_by(|a, b| a.result_id.cmp(&b.result_id));
+        Ok(out)
+    }
+
+    /// Key and payload of every record of `cell_id` of one of `kinds` whose parent is one of `parents`.
+    fn children(
+        &self,
+        cell_id: &str,
+        parents: &[&str],
+        kinds: &[RecordKind],
+    ) -> Result<Vec<(String, Vec<u8>)>, DrillStoreError> {
+        let codes: Vec<&str> = kinds.iter().map(|k| k.code()).collect();
+        let mut out = Vec::new();
+        for chunk in parents.chunks(KEYS_PER_LOOKUP) {
+            let text = format!(
+                "SELECT key, payload FROM drill_record WHERE cell_id = ?1 AND parent_id IN ({}) AND kind IN ({})",
+                placeholders(2, chunk.len()),
+                placeholders(2 + chunk.len(), codes.len())
+            );
+            let mut args: Vec<&dyn ToSql> = Vec::with_capacity(1 + chunk.len() + codes.len());
+            args.push(&cell_id);
+            args.extend(chunk.iter().map(|p| p as &dyn ToSql));
+            args.extend(codes.iter().map(|c| c as &dyn ToSql));
+            let rows = self
+                .conn
+                .prepare_cached(&text)
+                .and_then(|mut st| {
+                    st.query_map(args.as_slice(), |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()
+                })
+                .map_err(sql("read a hole's records"))?;
+            out.extend(rows);
+        }
+        Ok(out)
+    }
+
+    /// Every collared hole, sorted by cell and hole id.
+    ///
+    /// # Errors
+    /// [`DrillStoreError::Sql`] if the engine fails.
+    pub fn holes(&self) -> Result<Vec<(String, String)>, DrillStoreError> {
+        let mut st = self
+            .conn
+            .prepare_cached("SELECT cell_id, hole_id FROM drill_hole")
+            .map_err(sql("prepare the hole listing"))?;
+        let mut out = st
+            .query_map(params![], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })
+            .map_err(sql("list the holes"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sql("read the hole listing"))?;
+        out.sort();
+        Ok(out)
+    }
+
     /// Every interval the store holds, sorted by cell and interval id.
     ///
     /// # Errors
@@ -1136,7 +1276,7 @@ impl DrillStore {
         let mut stored = Stored::default();
         for chunk in keys.chunks(KEYS_PER_LOOKUP) {
             let text = format!(
-                "SELECT key, versions, hole_id FROM drill_record WHERE cell_id = ?1 AND key IN ({})",
+                "SELECT key, versions, parent_id FROM drill_record WHERE cell_id = ?1 AND key IN ({})",
                 placeholders(2, chunk.len())
             );
             let mut args: Vec<&dyn ToSql> = Vec::with_capacity(chunk.len() + 1);
@@ -1156,8 +1296,8 @@ impl DrillStore {
                     .collect::<Result<Vec<_>, _>>()
                 })
                 .map_err(sql("read a batch's stored records"))?;
-            for (key, versions, hole) in rows {
-                stored.records.insert(key, (versions, hole));
+            for (key, versions, parent) in rows {
+                stored.records.insert(key, (versions, parent));
             }
         }
         for chunk in interval_ids.chunks(KEYS_PER_LOOKUP) {
@@ -1194,7 +1334,7 @@ impl DrillStore {
 
     /// Write `key`'s new current version: supersede it in place if the store holds it (`stored` says), change it in
     /// `fresh` if this batch added it, and otherwise add it to `fresh`, whose rows [`DrillStore::write_new_records`]
-    /// inserts. Returns the hole its previous version was on, if it had one.
+    /// inserts. Returns its previous version's parent, if it had one.
     #[allow(clippy::too_many_arguments)]
     fn upsert_record<'a>(
         &self,
@@ -1202,35 +1342,35 @@ impl DrillStore {
         key: &'a str,
         kind: RecordKind,
         id: &'a str,
-        hole: Option<&str>,
+        parent: Option<&str>,
         seq: i64,
         payload: &'a [u8],
         stored: &mut Stored,
         fresh: &mut BTreeMap<&'a str, NewRecord<'a>>,
     ) -> Result<Option<String>, DrillStoreError> {
         if let Some(new) = fresh.get_mut(key) {
-            let prior_hole = std::mem::replace(&mut new.hole_id, hole.map(str::to_string));
+            let prior = std::mem::replace(&mut new.parent_id, parent.map(str::to_string));
             new.versions += 1;
             (new.seq, new.payload) = (seq, payload);
-            return Ok(prior_hole);
+            return Ok(prior);
         }
-        if let Some((versions, held_hole)) = stored.records.get_mut(key) {
+        if let Some((versions, held_parent)) = stored.records.get_mut(key) {
             *versions += 1;
-            let prior_hole = std::mem::replace(held_hole, hole.map(str::to_string));
+            let prior = std::mem::replace(held_parent, parent.map(str::to_string));
             self.exec_cached(
                 "supersede a record",
-                "UPDATE drill_record SET hole_id = ?1, versions = ?2, seq = ?3, payload = ?4 \
+                "UPDATE drill_record SET parent_id = ?1, versions = ?2, seq = ?3, payload = ?4 \
                  WHERE cell_id = ?5 AND key = ?6",
-                params![hole, *versions, seq, payload, cell, key],
+                params![parent, *versions, seq, payload, cell, key],
             )?;
-            return Ok(prior_hole);
+            return Ok(prior);
         }
         fresh.insert(
             key,
             NewRecord {
                 kind: kind.code(),
                 record_id: id,
-                hole_id: hole.map(str::to_string),
+                parent_id: parent.map(str::to_string),
                 versions: 1,
                 seq,
                 payload,
@@ -1249,7 +1389,7 @@ impl DrillStore {
         let rows: Vec<(&&str, &NewRecord<'_>)> = fresh.iter().collect();
         for chunk in rows.chunks(RECORD_ROWS_PER_STATEMENT) {
             let mut text = String::from(
-                "INSERT INTO drill_record(cell_id, key, kind, record_id, hole_id, versions, seq, payload) VALUES ",
+                "INSERT INTO drill_record(cell_id, key, kind, record_id, parent_id, versions, seq, payload) VALUES ",
             );
             let mut args: Vec<&dyn ToSql> = Vec::with_capacity(chunk.len() * COLUMNS);
             for (i, (key, new)) in chunk.iter().enumerate() {
@@ -1264,7 +1404,7 @@ impl DrillStore {
                     *key,
                     &new.kind,
                     &new.record_id,
-                    &new.hole_id,
+                    &new.parent_id,
                     &new.versions,
                     &new.seq,
                     &new.payload,
@@ -1367,7 +1507,7 @@ impl DrillStore {
         let rows = self
             .conn
             .prepare_cached(
-                "SELECT key, payload FROM drill_record WHERE cell_id = ?1 AND hole_id = ?2 AND kind = ?3",
+                "SELECT key, payload FROM drill_record WHERE cell_id = ?1 AND parent_id = ?2 AND kind = ?3",
             )
             .and_then(|mut st| {
                 st.query_map(params![cell, hole, RecordKind::Survey.code()], |r| {
@@ -1438,7 +1578,7 @@ impl DrillStore {
                 &op.key,
                 kind,
                 id,
-                hole_of(record),
+                parent_of(record),
                 seq,
                 &op.payload,
                 &mut stored,

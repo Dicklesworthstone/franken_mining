@@ -14,14 +14,15 @@
     clippy::cast_possible_truncation
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use fmine_drill::records::{
-    Alteration, Collar, HoleType, Logger, Orientation, Position, PositionMethod, Recovery,
-    RecoveryMethod, RunDirection, Survey, SurveyInstrument,
+    Alteration, AssayMethod, AssayValue, CertificateRef, Collar, CustodyEvent, Dispatch, HoleType,
+    LabCertificate, Logger, Orientation, Position, PositionMethod, QaqcRegime, Recovery,
+    RecoveryMethod, RunDirection, SampleType, Survey, SurveyInstrument,
 };
 use fmine_drill::store::{Change, commit};
 use fmine_ledger::batch::DeltaOp;
@@ -298,6 +299,48 @@ struct Expected {
     records: BTreeMap<(String, String), StoredRecord>,
     intervals: Vec<IntervalRow>,
     unlocated: Vec<UnlocatedHole>,
+    /// The collared holes.
+    collared: Vec<(String, String)>,
+    /// The records of every hole a collar, survey or interval names.
+    holes: BTreeMap<String, HoleRecords>,
+}
+
+/// `hole`'s records by their definition: its collar, surveys and intervals; the samples whose first interval is one
+/// of them; the results of those samples.
+fn reference_hole_records<'a>(
+    records: impl Iterator<Item = &'a DrillRecord> + Clone,
+    hole: &str,
+) -> HoleRecords {
+    let mut out = HoleRecords::default();
+    for record in records.clone() {
+        match record {
+            DrillRecord::Collar(c) if c.hole_id == hole => out.collar = Some(c.clone()),
+            DrillRecord::Survey(s) if s.hole_id == hole => out.surveys.push(s.clone()),
+            DrillRecord::Interval(iv) if iv.hole_id == hole => out.intervals.push(iv.clone()),
+            _ => {}
+        }
+    }
+    for record in records.clone() {
+        if let DrillRecord::Sample(s) = record
+            && s.interval_ids.first().is_some_and(|first| {
+                out.intervals.iter().any(|iv| iv.interval_id == *first)
+            })
+        {
+            out.samples.push(s.clone());
+        }
+    }
+    for record in records {
+        if let DrillRecord::AssayResult(r) = record
+            && out.samples.iter().any(|s| s.sample_id == r.sample_id)
+        {
+            out.results.push(r.clone());
+        }
+    }
+    out.surveys.sort_by(|a, b| a.survey_id.cmp(&b.survey_id));
+    out.intervals.sort_by(|a, b| a.interval_id.cmp(&b.interval_id));
+    out.samples.sort_by(|a, b| a.sample_id.cmp(&b.sample_id));
+    out.results.sort_by(|a, b| a.result_id.cmp(&b.result_id));
+    out
 }
 
 fn expected(held: &BTreeMap<String, Held>) -> Expected {
@@ -361,10 +404,38 @@ fn expected(held: &BTreeMap<String, Held>) -> Expected {
             })
         })
         .collect();
+    let current = || held.values().map(|h| &h.version.record);
+    let mut collared = Vec::new();
+    let mut named = BTreeSet::new();
+    for record in current() {
+        match record {
+            DrillRecord::Collar(c) => {
+                collared.push((CELL.to_string(), c.hole_id.clone()));
+                named.insert(c.hole_id.clone());
+            }
+            DrillRecord::Survey(s) => {
+                named.insert(s.hole_id.clone());
+            }
+            DrillRecord::Interval(iv) => {
+                named.insert(iv.hole_id.clone());
+            }
+            _ => {}
+        }
+    }
+    collared.sort();
+    let holes = named
+        .into_iter()
+        .map(|hole| {
+            let records = reference_hole_records(current(), &hole);
+            (hole, records)
+        })
+        .collect();
     Expected {
         records,
         intervals,
         unlocated,
+        collared,
+        holes,
     }
 }
 
@@ -445,6 +516,14 @@ fn assert_holds(store: &DrillStore, want: &Expected, context: &str) {
         want.unlocated,
         "{context}: unlocated holes"
     );
+    assert_eq!(store.holes().unwrap(), want.collared, "{context}: holes");
+    for (hole, records) in &want.holes {
+        assert_eq!(
+            &store.hole_records(CELL, hole).unwrap(),
+            records,
+            "{context}: records of {hole}"
+        );
+    }
     let states = store.index_states().unwrap();
     let garbage = store.index_garbage();
     if states.texts == IndexState::Current {
@@ -827,6 +906,165 @@ fn test_rebuilding_the_indexes_drops_their_garbage_and_keeps_every_answer() {
     let rows = store.intervals().unwrap();
     let (_, b) = rows[0].located.clone().unwrap();
     assert_eq!(store.bbox(CRS, &b).unwrap().len(), 1);
+}
+
+const LAB: &str = "LAB-A";
+const SENT_NS: i64 = 1_767_571_200_000_000_000;
+
+fn lab_sample(id: &str, interval_ids: &[&str]) -> Sample {
+    Sample {
+        sample_id: id.to_string(),
+        interval_ids: interval_ids.iter().map(|i| (*i).to_string()).collect(),
+        mass_g: Some(1_000.0),
+        sample_type: SampleType::HalfCore,
+        splitter: "core saw".to_string(),
+        custody: vec![CustodyEvent {
+            at_ns: SENT_NS,
+            holder: "core shed".to_string(),
+        }],
+    }
+}
+
+fn lab_result(id: &str, sample_id: &str, dispatch_id: &str, certificate_id: &str) -> AssayResult {
+    AssayResult {
+        result_id: id.to_string(),
+        sample_id: sample_id.to_string(),
+        dispatch_id: dispatch_id.to_string(),
+        analyte: "Au".to_string(),
+        method: AssayMethod::FireAssayAas,
+        value: AssayValue::Measured {
+            mass_fraction: 1.0 / 524_288.0,
+        },
+        lab: LAB.to_string(),
+        lab_batch: "B1".to_string(),
+        certificate: CertificateRef::Certificate {
+            certificate_id: certificate_id.to_string(),
+        },
+        qaqc_regime: QaqcRegime::Current,
+        received_at_ns: SENT_NS + 86_400_000_000_000,
+    }
+}
+
+fn lab_paperwork(dispatch_id: &str, certificate_id: &str, sample_ids: &[&str]) -> [DrillRecord; 2] {
+    let original = fmine_core::hash::sha256(certificate_id.as_bytes());
+    [
+        DrillRecord::Dispatch(Dispatch {
+            dispatch_id: dispatch_id.to_string(),
+            lab: LAB.to_string(),
+            sample_ids: sample_ids.iter().map(|s| (*s).to_string()).collect(),
+            dispatched_at_ns: SENT_NS,
+        }),
+        DrillRecord::LabCertificate(LabCertificate {
+            certificate_id: certificate_id.to_string(),
+            lab: LAB.to_string(),
+            original_sha256: original,
+            cas_root: fmine_core::hash::sha256(&original.0),
+            media_type: "text/csv".to_string(),
+            issued_at_ns: SENT_NS + 86_400_000_000_000,
+        }),
+    ]
+}
+
+/// A hole's records follow their parents. Moving an interval takes the samples that start on it, and their results,
+/// to its new hole; a sample relinked to an interval of another hole takes its results there. After each batch the
+/// store answers as the definition does for every hole, one never recorded included, and the ids below say what
+/// moved.
+#[test]
+fn test_a_holes_records_follow_their_intervals_and_samples() {
+    let mut ledger = L0Ledger::new();
+    let lease = ledger.create_cell(CELL, "node-1").unwrap();
+    let mut rng = Rng(7);
+    let mut iv = |id: &str, h: usize, from_mm: u64, to_mm: u64| Interval {
+        interval_id: id.to_string(),
+        from_mm,
+        to_mm,
+        ..interval(0, h, &mut rng)
+    };
+    let mut first: Vec<DrillRecord> = Vec::new();
+    for h in 0..2 {
+        let mut r = Rng(h as u64);
+        first.push(DrillRecord::Collar(collar(h, &mut r)));
+        first.push(DrillRecord::Survey(survey(h, 0, &mut r)));
+    }
+    first.extend([
+        DrillRecord::Interval(iv("I1", 0, 0, 1_000)),
+        DrillRecord::Interval(iv("I2", 0, 1_000, 2_500)),
+        DrillRecord::Interval(iv("I3", 0, 2_500, 4_000)),
+        DrillRecord::Interval(iv("I5", 1, 0, 1_000)),
+        DrillRecord::Sample(lab_sample("P1", &["I1"])),
+        DrillRecord::Sample(lab_sample("P2", &["I2", "I3"])),
+        DrillRecord::Sample(lab_sample("P5", &["I5"])),
+        DrillRecord::AssayResult(lab_result("R1", "P1", "D1", "C1")),
+        DrillRecord::AssayResult(lab_result("R2", "P2", "D1", "C1")),
+        DrillRecord::AssayResult(lab_result("R5", "P5", "D1", "C1")),
+    ]);
+    first.extend(lab_paperwork("D1", "C1", &["P1", "P2", "P5"]));
+    let mut later = vec![DrillRecord::Interval(iv("I6", 0, 4_000, 5_000))];
+    later.push(DrillRecord::Sample(lab_sample("P6", &["I6"])));
+    later.push(DrillRecord::AssayResult(lab_result("R6", "P6", "D2", "C2")));
+    later.extend(lab_paperwork("D2", "C2", &["P6"]));
+    let moved = iv("I1", 1, 0, 1_000);
+    let batches: Vec<Vec<Change>> = vec![
+        first.into_iter().map(Change::Put).collect(),
+        // I1 moves to H1, taking P1 and R1.
+        vec![Change::Supersede {
+            record: DrillRecord::Interval(moved),
+            reason: "relogged onto H1".to_string(),
+        }],
+        // P2 is relinked to I5 on H1, taking R2, and gains a copper result. (A result cannot be corrected onto
+        // another sample: `drill_law` refuses it.)
+        vec![
+            Change::Supersede {
+                record: DrillRecord::Sample(lab_sample("P2", &["I5"])),
+                reason: "sample sheet corrected".to_string(),
+            },
+            Change::Put(DrillRecord::AssayResult(AssayResult {
+                analyte: "Cu".to_string(),
+                ..lab_result("R7", "P2", "D1", "C1")
+            })),
+        ],
+        later.into_iter().map(Change::Put).collect(),
+    ];
+    // (samples, results) of H0 and H1 after each batch.
+    let ids = |r: &HoleRecords| {
+        (
+            r.samples.iter().map(|s| s.sample_id.clone()).collect::<Vec<_>>(),
+            r.results.iter().map(|x| x.result_id.clone()).collect::<Vec<_>>(),
+        )
+    };
+    let v = |s: &[&str]| s.iter().map(|x| (*x).to_string()).collect::<Vec<_>>();
+    let stated = [
+        [(v(&["P1", "P2"]), v(&["R1", "R2"])), (v(&["P5"]), v(&["R5"]))],
+        [(v(&["P2"]), v(&["R2"])), (v(&["P1", "P5"]), v(&["R1", "R5"]))],
+        [(v(&[]), v(&[])), (v(&["P1", "P2", "P5"]), v(&["R1", "R2", "R5", "R7"]))],
+        [(v(&["P6"]), v(&["R6"])), (v(&["P1", "P2", "P5"]), v(&["R1", "R2", "R5", "R7"]))],
+    ];
+    let mut projection = Projection::open(DrillStore::open_in_memory().unwrap()).unwrap();
+    let mut held: BTreeMap<String, DrillRecord> = BTreeMap::new();
+    for (k, changes) in batches.iter().enumerate() {
+        commit(&mut ledger, &lease, changes).unwrap();
+        projection.feed(&ledger.batches(CELL).unwrap()[k]).unwrap();
+        for change in changes {
+            let (Change::Put(r) | Change::Supersede { record: r, .. }) = change;
+            held.insert(record_key(r.kind(), r.id()), r.clone());
+        }
+        let store = projection.projector();
+        for hole in ["H0", "H1", "H9"] {
+            assert_eq!(
+                store.hole_records(CELL, hole).unwrap(),
+                reference_hole_records(held.values(), hole),
+                "batch {k}: {hole}"
+            );
+        }
+        for (h, want) in stated[k].iter().enumerate() {
+            assert_eq!(
+                &ids(&store.hole_records(CELL, &hole_id(h)).unwrap()),
+                want,
+                "batch {k}: H{h}"
+            );
+        }
+        assert_eq!(store.hole_records(CELL, "H9").unwrap(), HoleRecords::default());
+    }
 }
 
 /// Replaying the ledger to batch `k` gives the projection as of `k` (criterion 7's historical replay).
