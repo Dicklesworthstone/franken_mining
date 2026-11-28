@@ -220,8 +220,8 @@ pub enum BlankFailureMode {
         dl_multiple: f64,
     },
     /// Carlin 2025 wording (`C p.115`, C2 §4.5b): fails when blank exceeds `abs_threshold`
-    /// **AND** exceeds `carryover_fraction * preceding_grade` (or exceeds `abs_threshold` when
-    /// no preceding sample grade is provided).
+    /// **AND** exceeds `carryover_fraction * preceding_grade`. A missing preceding grade is
+    /// unknown in `[0, 1]`; it never silently removes the carryover condition.
     CarryoverAnd {
         /// Absolute contamination threshold (mass fraction).
         abs_threshold: f64,
@@ -348,6 +348,13 @@ impl SiteBlankRule {
                         ),
                     ));
                 }
+                let threshold = detection_limit * dl_multiple;
+                if !threshold.is_finite() || threshold == 0.0 {
+                    return Err(QaqcError::invalid(
+                        "blank_rule.dl",
+                        "the positive detection-limit threshold must remain finite and nonzero",
+                    ));
+                }
             }
             BlankFailureMode::CarryoverAnd {
                 abs_threshold,
@@ -386,6 +393,11 @@ pub enum PrecedingSampleGrade {
         /// Upper analytical reporting limit (mass fraction in `(0, 1]`).
         limit: f64,
     },
+    /// Below-detection routine sample: its mass fraction is in `[0, limit)`.
+    BelowDetection {
+        /// Detection limit (mass fraction in `(0, 1]`).
+        limit: f64,
+    },
 }
 
 /// One blank observation with optional preceding routine sample grade (for carryover checks).
@@ -403,19 +415,23 @@ pub struct BlankObservation {
     pub lab_batch: String,
     /// Observed blank assay value (below-detection is kept as non-detect, never DL/2).
     pub value: AssayValue,
-    /// Preceding routine sample grade (measured or over-limit lower bound), if known for carryover rules.
+    /// Preceding routine sample grade, retaining censoring; `None` is unknown in `[0, 1]`.
     pub preceding_sample_grade: Option<PrecedingSampleGrade>,
 }
 
 /// Verdict for a single blank observation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlankStatus {
-    /// Below detection limit (non-detect; no contamination observed).
+    /// Every concentration admitted by the below-detection bound passes the rule.
     PassBelowDetection,
     /// Measured within blank tolerance.
     PassMeasured,
-    /// Failed blank contamination threshold (or above upper limit).
+    /// Every concentration admitted by an above-upper bound passes the rule.
+    PassCensored,
+    /// Every admissible blank/predecessor concentration pair fails the contamination rule.
     FailContamination,
+    /// Some admissible concentrations pass and others fail; no point substitute is used.
+    Indeterminate,
 }
 
 /// Detailed blank verdict.
@@ -435,6 +451,18 @@ pub struct BlankVerdict {
     pub status: BlankStatus,
     /// Measured mass fraction, or `None` when censored.
     pub measured_mass_fraction: Option<f64>,
+    /// Original assay, including its exact censoring kind and bound.
+    pub value: AssayValue,
+    /// Original preceding grade declaration, including censoring or absence.
+    pub preceding_sample_grade: Option<PrecedingSampleGrade>,
+    /// Smallest possible effective failure threshold under the declared rule.
+    pub threshold_lower: f64,
+    /// Largest possible effective failure threshold under the declared rule.
+    pub threshold_upper: f64,
+    /// Whether `threshold_lower` is excluded by the preceding grade's censoring.
+    pub threshold_lower_exclusive: bool,
+    /// Whether `threshold_upper` is excluded by the preceding grade's censoring.
+    pub threshold_upper_exclusive: bool,
 }
 
 /// Summary of blank evaluations under one versioned [`SiteBlankRule`].
@@ -446,22 +474,123 @@ pub struct BlankBatchEvaluation {
     pub rule_version: String,
     /// Source document.
     pub rule_source_doc: String,
+    /// Numeric predicate evaluated; provenance text does not replace its actual parameters.
+    pub rule_mode: BlankFailureMode,
     /// Total blanks evaluated.
     pub total_count: usize,
     /// Count below detection limit.
     pub below_detection_count: usize,
+    /// Blanks whose complete admissible range passes the rule.
+    pub pass_count: usize,
+    /// Blanks whose bounds do not determine whether the rule passes or fails.
+    pub indeterminate_count: usize,
     /// Count failing contamination check.
     pub failure_count: usize,
-    /// Failure rate percent (`100 * failure_count / total_count`); `None` if `total_count == 0`.
+    /// Confirmed failure percentage over all blanks; a lower bound when any are indeterminate.
+    /// `None` if `total_count == 0`.
     pub failure_rate_pct: Option<f64>,
+    /// Upper bound on failure percentage, counting indeterminate blanks as possibly failed.
+    pub possible_failure_rate_pct: Option<f64>,
     /// Per-blank verdicts in input order.
     pub verdicts: Vec<BlankVerdict>,
 }
 
+#[derive(Clone, Copy)]
+struct BlankBounds {
+    lower: f64,
+    upper: f64,
+    lower_exclusive: bool,
+    upper_exclusive: bool,
+}
+
+impl BlankBounds {
+    fn point(value: f64) -> Self {
+        Self {
+            lower: value,
+            upper: value,
+            lower_exclusive: false,
+            upper_exclusive: false,
+        }
+    }
+
+    fn assay(value: AssayValue, field: &str) -> Result<Self, QaqcError> {
+        match value {
+            AssayValue::Measured { mass_fraction }
+                if mass_fraction.is_finite() && (0.0..=1.0).contains(&mass_fraction) =>
+            {
+                Ok(Self::point(mass_fraction))
+            }
+            AssayValue::BelowDetection { limit }
+                if limit.is_finite() && limit > 0.0 && limit <= 1.0 =>
+            {
+                Ok(Self {
+                    lower: 0.0,
+                    upper: limit,
+                    lower_exclusive: false,
+                    upper_exclusive: true,
+                })
+            }
+            AssayValue::AboveUpper { limit } if limit.is_finite() && limit > 0.0 && limit < 1.0 => {
+                Ok(Self {
+                    lower: limit,
+                    upper: 1.0,
+                    lower_exclusive: true,
+                    upper_exclusive: false,
+                })
+            }
+            _ => Err(QaqcError::invalid(
+                field,
+                "assay must define a nonempty finite mass-fraction range in [0, 1]",
+            )),
+        }
+    }
+
+    fn scale(self, fraction: f64) -> Result<Self, QaqcError> {
+        let lower = self.lower * fraction;
+        let upper = self.upper * fraction;
+        if (self.lower > 0.0 && lower == 0.0)
+            || (self.upper > 0.0 && upper == 0.0)
+            || (lower == upper && (self.lower_exclusive || self.upper_exclusive))
+        {
+            return Err(QaqcError::NumericalFailure {
+                context: "blank carryover threshold".into(),
+                detail: "a nonzero bound or nonempty censored range was lost to finite precision"
+                    .into(),
+            });
+        }
+        Ok(Self {
+            lower,
+            upper,
+            ..self
+        })
+    }
+
+    fn maximum(self, threshold: f64) -> Self {
+        Self {
+            lower: self.lower.max(threshold),
+            upper: self.upper.max(threshold),
+            lower_exclusive: self.lower >= threshold && self.lower_exclusive,
+            upper_exclusive: self.upper > threshold && self.upper_exclusive,
+        }
+    }
+
+    fn minimum(self, threshold: f64) -> Self {
+        Self {
+            lower: self.lower.min(threshold),
+            upper: self.upper.min(threshold),
+            lower_exclusive: self.lower < threshold && self.lower_exclusive,
+            upper_exclusive: self.upper <= threshold && self.upper_exclusive,
+        }
+    }
+}
+
 /// Evaluates blank observations under a versioned [`SiteBlankRule`].
 ///
-/// Below-detection results are preserved as [`BlankStatus::PassBelowDetection`] without
-/// substituting DL/2 (`G-CENS`).
+/// Strict exceedance is evaluated over the entire admissible concentration range. A censored
+/// value is not replaced by its bound or DL/2 (`G-CENS`), and a missing preceding grade is unknown
+/// in `[0, 1]`. A result is [`BlankStatus::Indeterminate`] when both pass and failure are possible.
+/// AND uses the maximum of the two thresholds; OR uses their minimum. All comparisons are on the
+/// computed binary64 values, with equality passing and no undeclared rounding tolerance.
 pub fn evaluate_blanks(
     observations: &[BlankObservation],
     rule: &SiteBlankRule,
@@ -470,108 +599,67 @@ pub fn evaluate_blanks(
     let mut verdicts = Vec::with_capacity(observations.len());
     let mut below_detection_count = 0usize;
     let mut failure_count = 0usize;
+    let mut pass_count = 0usize;
+    let mut indeterminate_count = 0usize;
 
     for obs in observations {
-        match obs.preceding_sample_grade {
-            Some(PrecedingSampleGrade::Measured(prev))
-                if !(prev.is_finite() && (0.0..=1.0).contains(&prev)) =>
-            {
-                return Err(QaqcError::invalid(
-                    "blank.preceding_sample_grade",
-                    format!(
-                        "result '{}': preceding grade {prev} outside [0, 1]",
-                        obs.result_id
-                    ),
-                ));
+        let value = BlankBounds::assay(obs.value, "blank.value")?;
+        let preceding = match obs.preceding_sample_grade {
+            Some(PrecedingSampleGrade::Measured(mass_fraction)) => BlankBounds::assay(
+                AssayValue::Measured { mass_fraction },
+                "blank.preceding_sample_grade",
+            )?,
+            Some(PrecedingSampleGrade::AboveUpper { limit }) => BlankBounds::assay(
+                AssayValue::AboveUpper { limit },
+                "blank.preceding_sample_grade",
+            )?,
+            Some(PrecedingSampleGrade::BelowDetection { limit }) => BlankBounds::assay(
+                AssayValue::BelowDetection { limit },
+                "blank.preceding_sample_grade",
+            )?,
+            None => BlankBounds {
+                lower: 0.0,
+                upper: 1.0,
+                lower_exclusive: false,
+                upper_exclusive: false,
+            },
+        };
+        let threshold = match rule.mode {
+            BlankFailureMode::AboveMultipleOfDl {
+                detection_limit,
+                dl_multiple,
+            } => BlankBounds::point(detection_limit * dl_multiple),
+            BlankFailureMode::CarryoverAnd {
+                abs_threshold,
+                carryover_fraction,
+            } => preceding.scale(carryover_fraction)?.maximum(abs_threshold),
+            BlankFailureMode::CarryoverOr {
+                abs_threshold,
+                carryover_fraction,
+            } => preceding.scale(carryover_fraction)?.minimum(abs_threshold),
+        };
+        let measured_mass_fraction = match obs.value {
+            AssayValue::Measured { mass_fraction } => Some(mass_fraction),
+            AssayValue::BelowDetection { .. } | AssayValue::AboveUpper { .. } => None,
+        };
+        below_detection_count +=
+            usize::from(matches!(obs.value, AssayValue::BelowDetection { .. }));
+        let status = if value.upper <= threshold.lower {
+            pass_count += 1;
+            match obs.value {
+                AssayValue::Measured { .. } => BlankStatus::PassMeasured,
+                AssayValue::BelowDetection { .. } => BlankStatus::PassBelowDetection,
+                AssayValue::AboveUpper { .. } => BlankStatus::PassCensored,
             }
-            Some(PrecedingSampleGrade::AboveUpper { limit })
-                if !(limit.is_finite() && limit > 0.0 && limit <= 1.0) =>
-            {
-                return Err(QaqcError::invalid(
-                    "blank.preceding_sample_grade",
-                    format!(
-                        "result '{}': preceding upper limit {limit} outside (0, 1]",
-                        obs.result_id
-                    ),
-                ));
-            }
-            _ => {}
-        }
-
-        let (status, measured_mass_fraction) = match obs.value {
-            AssayValue::BelowDetection { limit } => {
-                if !(limit.is_finite() && limit > 0.0 && limit <= 1.0) {
-                    return Err(QaqcError::invalid(
-                        "blank.value.limit",
-                        format!("result '{}': limit {limit} outside (0, 1]", obs.result_id),
-                    ));
-                }
-                below_detection_count += 1;
-                (BlankStatus::PassBelowDetection, None)
-            }
-            AssayValue::AboveUpper { limit } => {
-                if !(limit.is_finite() && limit > 0.0 && limit <= 1.0) {
-                    return Err(QaqcError::invalid(
-                        "blank.value.limit",
-                        format!("result '{}': limit {limit} outside (0, 1]", obs.result_id),
-                    ));
-                }
-                failure_count += 1;
-                (BlankStatus::FailContamination, None)
-            }
-            AssayValue::Measured { mass_fraction } => {
-                if !(mass_fraction.is_finite() && (0.0..=1.0).contains(&mass_fraction)) {
-                    return Err(QaqcError::invalid(
-                        "blank.value.mass_fraction",
-                        format!(
-                            "result '{}': mass fraction {mass_fraction} outside [0, 1]",
-                            obs.result_id
-                        ),
-                    ));
-                }
-                let failed = match rule.mode {
-                    BlankFailureMode::AboveMultipleOfDl {
-                        detection_limit,
-                        dl_multiple,
-                    } => mass_fraction > dl_multiple * detection_limit,
-                    BlankFailureMode::CarryoverAnd {
-                        abs_threshold,
-                        carryover_fraction,
-                    } => match obs.preceding_sample_grade {
-                        Some(PrecedingSampleGrade::Measured(prev)) => {
-                            mass_fraction > abs_threshold
-                                && mass_fraction > carryover_fraction * prev
-                        }
-                        Some(PrecedingSampleGrade::AboveUpper { limit }) => {
-                            // True preceding grade > limit: guaranteed pass if <= carryover_fraction * limit;
-                            // conservatively fail if above both abs_threshold and carryover_fraction * limit.
-                            mass_fraction > abs_threshold
-                                && mass_fraction > carryover_fraction * limit
-                        }
-                        None => mass_fraction > abs_threshold,
-                    },
-                    BlankFailureMode::CarryoverOr {
-                        abs_threshold,
-                        carryover_fraction,
-                    } => match obs.preceding_sample_grade {
-                        Some(PrecedingSampleGrade::Measured(prev)) => {
-                            mass_fraction > abs_threshold
-                                || mass_fraction > carryover_fraction * prev
-                        }
-                        Some(PrecedingSampleGrade::AboveUpper { limit }) => {
-                            mass_fraction > abs_threshold
-                                || mass_fraction > carryover_fraction * limit
-                        }
-                        None => mass_fraction > abs_threshold,
-                    },
-                };
-                if failed {
-                    failure_count += 1;
-                    (BlankStatus::FailContamination, Some(mass_fraction))
-                } else {
-                    (BlankStatus::PassMeasured, Some(mass_fraction))
-                }
-            }
+        } else if value.lower > threshold.upper
+            || (value.lower == threshold.upper
+                && (value.lower_exclusive || threshold.upper_exclusive))
+        {
+            failure_count += 1;
+            BlankStatus::FailContamination
+        } else {
+            indeterminate_count += 1;
+            BlankStatus::Indeterminate
         };
 
         verdicts.push(BlankVerdict {
@@ -582,6 +670,12 @@ pub fn evaluate_blanks(
             lab_batch: obs.lab_batch.clone(),
             status,
             measured_mass_fraction,
+            value: obs.value,
+            preceding_sample_grade: obs.preceding_sample_grade,
+            threshold_lower: threshold.lower,
+            threshold_upper: threshold.upper,
+            threshold_lower_exclusive: threshold.lower_exclusive,
+            threshold_upper_exclusive: threshold.upper_exclusive,
         });
     }
 
@@ -591,15 +685,24 @@ pub fn evaluate_blanks(
     } else {
         None
     };
+    let possible_failure_rate_pct = if total_count > 0 {
+        Some(100.0 * ((failure_count + indeterminate_count) as f64) / (total_count as f64))
+    } else {
+        None
+    };
 
     Ok(BlankBatchEvaluation {
         rule_id: rule.rule_id.clone(),
         rule_version: rule.version.clone(),
         rule_source_doc: rule.source_doc.clone(),
+        rule_mode: rule.mode,
         total_count,
         below_detection_count,
+        pass_count,
+        indeterminate_count,
         failure_count,
         failure_rate_pct,
+        possible_failure_rate_pct,
         verdicts,
     })
 }
@@ -630,7 +733,10 @@ pub struct LabQaqcSummary {
     pub blank_total: usize,
     /// Total blank failures at this lab.
     pub blank_failures: usize,
-    /// Blank failure rate percent (`None` if `blank_total == 0`).
+    /// Blanks whose censoring or missing preceding grade leaves the rule undecided.
+    pub blank_indeterminate: usize,
+    /// Confirmed blank failure percentage over all blanks (`None` if `blank_total == 0`).
+    /// This is a lower bound when `blank_indeterminate > 0`.
     pub blank_failure_rate_pct: Option<f64>,
     /// Per-CRM detailed evaluations at this lab, ordered by `crm_id`.
     pub crm_evaluations: BTreeMap<String, CrmBatchEvaluation>,
@@ -1063,9 +1169,10 @@ pub fn evaluate_campaign_qaqc(
                     prev_routine_grade_by_batch
                         .insert(batch_key, PrecedingSampleGrade::AboveUpper { limit });
                 }
-                AssayValue::BelowDetection { .. } => {
-                    // Clear stale preceding grade so an earlier high-grade sample never leaks past a <DL sample.
-                    prev_routine_grade_by_batch.remove(&batch_key);
+                AssayValue::BelowDetection { limit } => {
+                    // Retain the current censored predecessor instead of an older grade or an invented zero.
+                    prev_routine_grade_by_batch
+                        .insert(batch_key, PrecedingSampleGrade::BelowDetection { limit });
                 }
             }
         }
@@ -1168,6 +1275,7 @@ pub fn evaluate_campaign_qaqc(
                 crm_failure_rate_pct,
                 blank_total: blank_evaluation.total_count,
                 blank_failures: blank_evaluation.failure_count,
+                blank_indeterminate: blank_evaluation.indeterminate_count,
                 blank_failure_rate_pct: blank_evaluation.failure_rate_pct,
                 crm_evaluations,
                 blank_evaluation,

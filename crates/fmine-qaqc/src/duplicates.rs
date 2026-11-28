@@ -4,7 +4,7 @@
 //! decision options (`BD-167`, `BD-284`; plan §12.3, E359–E363, E369–E374, E390, FX-1, FX-4).
 //! Determinism: BitwisePortable (IEEE-754 arithmetic and `fmine_core::det` primitives only).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use fmine_core::det;
 use fmine_drill::records::{AssayValue, DuplicateStage, SampleType};
@@ -74,8 +74,12 @@ impl Default for DuplicatePolicy {
 /// Thompson–Howarth precision estimate (`E369`, `E370`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ThompsonHowarthEstimate {
-    /// Number of valid pairs used (always `>= 50`).
+    /// Number of eligible pairs supplied (always `>= 50`), including the final incomplete bin.
     pub n_pairs: usize,
+    /// Pairs entering full 11-pair regression bins.
+    pub fitted_pairs: usize,
+    /// Eligible pairs left over after forming full bins; retained in the other precision summaries.
+    pub unbinned_pairs: usize,
     /// Number of 11-pair Thompson–Howarth bins formed.
     pub n_bins: usize,
     /// Fitted zero-concentration intercept `s_0` (absolute SD at grade 0).
@@ -86,6 +90,30 @@ pub struct ThompsonHowarthEstimate {
     pub relative_sd_pct_at_median: f64,
     /// Mandatory caveat: `"assumes normal errors; optimistic"` (`E370`).
     pub caveat: String,
+}
+
+/// Disposition of each supplied duplicate pair; exclusions never change the input denominator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DuplicatePairStatus {
+    Included,
+    Censored,
+    BothZero,
+    MassSupportMismatch,
+}
+
+/// One pair's eligibility and precision, retaining caller order and sample identity.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DuplicatePairVerdict {
+    pub index: usize,
+    pub original_sample_id: String,
+    pub duplicate_sample_id: String,
+    pub status: DuplicatePairStatus,
+    pub detail: Option<String>,
+    /// `100 * |a-b| / (a+b)` for an included pair, not a population precision estimate.
+    pub pair_hard_pct: Option<f64>,
+    /// Both sample types and both masses were declared and passed the supplied policy.
+    /// Absent metadata never counts as verified support.
+    pub mass_support_verified: bool,
 }
 
 /// Canonical duplicate precision report for one group (plan §12.3, E369–E374).
@@ -101,6 +129,10 @@ pub struct DuplicatePrecisionReport {
     pub excluded_zero_pairs: usize,
     /// Duplicate sample ids rejected for `E374` mass or support mismatch.
     pub unfit_mass_mismatch_ids: Vec<String>,
+    /// Included pairs whose missing mass/type metadata prevents verifying support equality.
+    pub unverified_support_pairs: usize,
+    /// Every supplied pair, including each censored, zero-sum or mismatched exclusion.
+    pub pairs: Vec<DuplicatePairVerdict>,
     /// Canonical relative precision: `CV_AVR% = 100 * sqrt((2/N) * sum((a-b)^2/(a+b)^2))` (`E371`).
     pub cv_avr_pct: f64,
     /// Relative variance `(CV_AVR% / 100)^2` feeding the stage/nugget decomposition.
@@ -115,8 +147,8 @@ pub struct DuplicatePrecisionReport {
     pub p90_pair_hard_pct: f64,
     /// Empirical mean per-pair AMPD (`200 * |a-b| / (a+b)`).
     pub mean_pair_ampd_pct: f64,
-    /// Thompson–Howarth view when `valid_pairs >= 50` (always carries the optimistic caveat);
-    /// `None` when `valid_pairs < 50` (`E369`).
+    /// Thompson–Howarth view when `valid_pairs >= 50` and the fitted relationship is identifiable
+    /// and finite (always carries the optimistic caveat). An unavailable fit is `None`.
     pub thompson_howarth: Option<ThompsonHowarthEstimate>,
 }
 
@@ -124,27 +156,36 @@ pub struct DuplicatePrecisionReport {
 ///
 /// Computes canonical `CV_AVR%`, derived `HARD` and `AMPD`, enforces `E374` mass matching,
 /// preserves censored pairs without DL/2 substitution, and emits Thompson–Howarth only when
-/// `N >= 50` with its mandatory `"assumes normal errors; optimistic"` label.
+/// `N >= 50` with its mandatory `"assumes normal errors; optimistic"` label. One evaluation must
+/// contain exactly one stage and grade-band declaration; analyte/method grouping is the caller's
+/// responsibility. Missing support metadata is explicitly reported as unverified.
 pub fn evaluate_duplicates(
     pairs: &[DuplicatePair],
     policy: &DuplicatePolicy,
 ) -> Result<DuplicatePrecisionReport, QaqcError> {
-    if !(policy.max_relative_mass_diff.is_finite() && policy.max_relative_mass_diff >= 0.0) {
-        return Err(QaqcError::invalid(
-            "duplicate_policy.max_relative_mass_diff",
-            format!(
-                "must be finite and >= 0, got {}",
-                policy.max_relative_mass_diff
-            ),
-        ));
-    }
+    validate_pairs(pairs, true)?;
+    validate_policy(policy)?;
 
     let mut excluded_censored = 0usize;
     let mut excluded_zero_pairs = 0usize;
     let mut unfit_mass_mismatch_ids = Vec::new();
     let mut valid_ab: Vec<(f64, f64)> = Vec::new();
+    let mut verdicts = Vec::with_capacity(pairs.len());
+    let mut unverified_support_pairs = 0;
 
-    for p in pairs {
+    for (index, p) in pairs.iter().enumerate() {
+        let mut verdict = DuplicatePairVerdict {
+            index,
+            original_sample_id: p.original_sample_id.clone(),
+            duplicate_sample_id: p.duplicate_sample_id.clone(),
+            status: DuplicatePairStatus::Included,
+            detail: None,
+            pair_hard_pct: None,
+            mass_support_verified: p.original_sample_type.is_some()
+                && p.duplicate_sample_type.is_some()
+                && p.original_mass_g.is_some()
+                && p.duplicate_mass_g.is_some(),
+        };
         if let Some(reason) = check_mass_support_mismatch(p, policy.max_relative_mass_diff) {
             if policy.refuse_on_mass_mismatch {
                 return Err(QaqcError::DuplicateSupportMismatch {
@@ -154,6 +195,10 @@ pub fn evaluate_duplicates(
                 });
             }
             unfit_mass_mismatch_ids.push(p.duplicate_sample_id.clone());
+            verdict.status = DuplicatePairStatus::MassSupportMismatch;
+            verdict.detail = Some(reason);
+            verdict.mass_support_verified = false;
+            verdicts.push(verdict);
             continue;
         }
         match (p.original, p.duplicate) {
@@ -161,29 +206,26 @@ pub fn evaluate_duplicates(
                 AssayValue::Measured { mass_fraction: a },
                 AssayValue::Measured { mass_fraction: b },
             ) => {
-                if !(a.is_finite()
-                    && b.is_finite()
-                    && (0.0..=1.0).contains(&a)
-                    && (0.0..=1.0).contains(&b))
-                {
-                    return Err(QaqcError::invalid(
-                        "duplicate.value",
-                        format!(
-                            "pair ('{}', '{}'): values ({a}, {b}) outside [0, 1]",
-                            p.original_sample_id, p.duplicate_sample_id
-                        ),
-                    ));
-                }
                 if a + b == 0.0 {
                     excluded_zero_pairs += 1;
+                    verdict.status = DuplicatePairStatus::BothZero;
+                    verdict.detail = Some(
+                        "both measured grades are zero; relative difference is undefined".into(),
+                    );
                 } else {
                     valid_ab.push((a, b));
+                    verdict.pair_hard_pct = Some(100.0 * (a - b).abs() / (a + b));
+                    unverified_support_pairs += usize::from(!verdict.mass_support_verified);
                 }
             }
             _ => {
                 excluded_censored += 1;
+                verdict.status = DuplicatePairStatus::Censored;
+                verdict.detail =
+                    Some("at least one assay is censored; no numerical substitution".into());
             }
         }
+        verdicts.push(verdict);
     }
 
     if valid_ab.is_empty() {
@@ -195,18 +237,14 @@ pub fn evaluate_duplicates(
     }
 
     let n = valid_ab.len();
-    let mut sum_sq_rel = 0.0;
-    let mut pair_hard = Vec::with_capacity(n);
-    let mut sum_ampd = 0.0;
-
-    for &(a, b) in &valid_ab {
-        let diff = (a - b).abs();
-        let sum = a + b;
-        let ratio = diff / sum;
-        sum_sq_rel += ratio * ratio;
-        pair_hard.push(100.0 * ratio);
-        sum_ampd += 200.0 * ratio;
-    }
+    let mut ratios: Vec<f64> = valid_ab
+        .iter()
+        .map(|&(a, b)| (a - b).abs() / (a + b))
+        .collect();
+    ratios.sort_by(f64::total_cmp);
+    let sum_sq_rel = compensated_sum(ratios.iter().map(|ratio| ratio * ratio));
+    let pair_hard: Vec<f64> = ratios.iter().map(|ratio| 100.0 * ratio).collect();
+    let sum_ampd = compensated_sum(ratios.iter().map(|ratio| 200.0 * ratio));
 
     let relative_variance = (2.0 / (n as f64)) * sum_sq_rel;
     let cv_avr_pct = 100.0 * det::sqrt(relative_variance);
@@ -214,7 +252,6 @@ pub fn evaluate_duplicates(
     let hard_from_cv_pct = cv_avr_pct / sqrt2;
     let ampd_from_cv_pct = sqrt2 * cv_avr_pct;
 
-    pair_hard.sort_by(f64::total_cmp);
     let median_pair_hard_pct = sorted_quantile(&pair_hard, 0.50);
     let p90_pair_hard_pct = sorted_quantile(&pair_hard, 0.90);
     let mean_pair_ampd_pct = sum_ampd / (n as f64);
@@ -233,6 +270,8 @@ pub fn evaluate_duplicates(
         excluded_censored,
         excluded_zero_pairs,
         unfit_mass_mismatch_ids,
+        unverified_support_pairs,
+        pairs: verdicts,
         cv_avr_pct,
         relative_variance,
         hard_from_cv_pct,
@@ -242,6 +281,108 @@ pub fn evaluate_duplicates(
         mean_pair_ampd_pct,
         thompson_howarth,
     })
+}
+
+/// Validate every input before exclusion, so a censor or support mismatch cannot hide invalid data.
+fn validate_pairs(pairs: &[DuplicatePair], same_stage: bool) -> Result<(), QaqcError> {
+    let mut duplicate_ids = BTreeSet::new();
+    for p in pairs {
+        for id in [&p.original_sample_id, &p.duplicate_sample_id] {
+            if id.is_empty()
+                || id.trim() != id
+                || id.len() > 128
+                || id.chars().any(char::is_control)
+            {
+                return Err(QaqcError::invalid(
+                    "duplicate.sample_id",
+                    "sample IDs must be nonempty bounded text without controls or surrounding whitespace",
+                ));
+            }
+        }
+        if p.original_sample_id == p.duplicate_sample_id
+            || !duplicate_ids.insert(&p.duplicate_sample_id)
+        {
+            return Err(QaqcError::invalid(
+                "duplicate.sample_id",
+                "a split must differ from its original and each duplicate sample may occur only once",
+            ));
+        }
+        if p.grade_band.as_ref().is_some_and(|band| {
+            band.is_empty()
+                || band.trim() != band
+                || band.len() > 256
+                || band.chars().any(char::is_control)
+        }) {
+            return Err(QaqcError::invalid(
+                "duplicate.grade_band",
+                "a declared grade band must be nonempty bounded text",
+            ));
+        }
+        if let Some(first) = pairs.first()
+            && (p.grade_band != first.grade_band || (same_stage && p.stage != first.stage))
+        {
+            return Err(QaqcError::invalid(
+                "duplicate.group",
+                "evaluate each stage and grade band separately; stage decomposition also requires one common grade band",
+            ));
+        }
+        for value in [p.original, p.duplicate] {
+            let valid = match value {
+                AssayValue::Measured { mass_fraction } => {
+                    mass_fraction.is_finite() && (0.0..=1.0).contains(&mass_fraction)
+                }
+                AssayValue::BelowDetection { limit } => {
+                    limit.is_finite() && limit > 0.0 && limit <= 1.0
+                }
+                AssayValue::AboveUpper { limit } => limit.is_finite() && limit > 0.0 && limit < 1.0,
+            };
+            if !valid {
+                return Err(QaqcError::invalid(
+                    "duplicate.value",
+                    format!(
+                        "pair ('{}', '{}'): measured fractions must lie in [0, 1] and censoring bounds in (0, 1]",
+                        p.original_sample_id, p.duplicate_sample_id
+                    ),
+                ));
+            }
+        }
+        for mass in [p.original_mass_g, p.duplicate_mass_g]
+            .into_iter()
+            .flatten()
+        {
+            if !mass.is_finite() || mass <= 0.0 {
+                return Err(QaqcError::invalid(
+                    "duplicate.mass_g",
+                    "every supplied mass must be finite and positive, even when the other mass is absent",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_policy(policy: &DuplicatePolicy) -> Result<(), QaqcError> {
+    if !(policy.max_relative_mass_diff.is_finite() && policy.max_relative_mass_diff >= 0.0) {
+        return Err(QaqcError::invalid(
+            "duplicate_policy.max_relative_mass_diff",
+            "must be finite and nonnegative",
+        ));
+    }
+    Ok(())
+}
+
+fn compensated_sum(values: impl Iterator<Item = f64>) -> f64 {
+    let (mut total, mut correction) = (0.0_f64, 0.0);
+    for value in values {
+        let next = total + value;
+        correction += if total.abs() >= value.abs() {
+            (total - next) + value
+        } else {
+            (value - next) + total
+        };
+        total = next;
+    }
+    total + correction
 }
 
 fn check_mass_support_mismatch(p: &DuplicatePair, max_rel_diff: f64) -> Option<String> {
@@ -255,11 +396,6 @@ fn check_mass_support_mismatch(p: &DuplicatePair, max_rel_diff: f64) -> Option<S
         ));
     }
     if let (Some(orig_m), Some(dup_m)) = (p.original_mass_g, p.duplicate_mass_g) {
-        if !(orig_m.is_finite() && dup_m.is_finite() && orig_m > 0.0 && dup_m > 0.0) {
-            return Some(format!(
-                "invalid sample masses orig={orig_m} g, dup={dup_m} g"
-            ));
-        }
         let rel = (dup_m - orig_m).abs() / orig_m;
         if rel > max_rel_diff {
             return Some(format!(
@@ -276,11 +412,20 @@ fn compute_thompson_howarth(pairs: &[(f64, f64)]) -> Option<ThompsonHowarthEstim
     if pairs.len() < THOMPSON_HOWARTH_MIN_PAIRS {
         return None;
     }
-    // Sort pairs ascending by pair mean (a + b)/2 and partition into groups of 11 (Thompson & Howarth 1978).
+    // Scale before regression: at very low grades, raw concentration squares underflow and erase
+    // the fitted proportional error. The scale cancels in k and relative SD, and restores s_0.
+    let scale = pairs
+        .iter()
+        .map(|&(a, b)| a.max(b))
+        .max_by(f64::total_cmp)?;
+    // Sort pairs ascending by pair mean and partition into groups of 11 (Thompson & Howarth 1978).
     let mut ordered: Vec<(f64, f64)> = pairs
         .iter()
-        .map(|&(a, b)| (0.5 * (a + b), (a - b).abs()))
+        .map(|&(a, b)| (0.5 * (a / scale + b / scale), (a - b).abs() / scale))
         .collect();
+    if ordered.iter().any(|&(mean, _)| mean == 0.0) {
+        return None;
+    }
     ordered.sort_by(|x, y| x.0.total_cmp(&y.0).then_with(|| x.1.total_cmp(&y.1)));
 
     const GROUP_SIZE: usize = 11;
@@ -290,7 +435,7 @@ fn compute_thompson_howarth(pairs: &[(f64, f64)]) -> Option<ThompsonHowarthEstim
     let mut xs = Vec::new();
     let mut ys = Vec::new();
     for chunk in ordered.as_chunks::<GROUP_SIZE>().0 {
-        let mean_c = chunk.iter().map(|&(m, _)| m).sum::<f64>() / (GROUP_SIZE as f64);
+        let mean_c = compensated_sum(chunk.iter().map(|&(m, _)| m)) / (GROUP_SIZE as f64);
         let mut diffs: Vec<f64> = chunk.iter().map(|&(_, d)| d).collect();
         diffs.sort_by(f64::total_cmp);
         let med_diff = diffs[GROUP_SIZE / 2];
@@ -302,31 +447,41 @@ fn compute_thompson_howarth(pairs: &[(f64, f64)]) -> Option<ThompsonHowarthEstim
     }
 
     let n_bins = xs.len();
-    let x_bar = xs.iter().sum::<f64>() / (n_bins as f64);
-    let y_bar = ys.iter().sum::<f64>() / (n_bins as f64);
-    let sxx: f64 = xs.iter().map(|&x| (x - x_bar) * (x - x_bar)).sum();
-    let sxy: f64 = xs
-        .iter()
-        .zip(&ys)
-        .map(|(&x, &y)| (x - x_bar) * (y - y_bar))
-        .sum();
-    let (slope_k, intercept_s0) = if sxx > 0.0 {
-        let k = sxy / sxx;
-        (k, y_bar - k * x_bar)
-    } else {
-        (0.0, y_bar)
-    };
+    let x_bar = compensated_sum(xs.iter().copied()) / (n_bins as f64);
+    let y_bar = compensated_sum(ys.iter().copied()) / (n_bins as f64);
+    let x_span = xs.last()? - xs.first()?;
+    if x_span <= 0.0 {
+        return None; // One grade cannot identify an intercept and a proportional slope.
+    }
+    let sxx = compensated_sum(xs.iter().map(|&x| {
+        let normalized = (x - x_bar) / x_span;
+        normalized * normalized
+    }));
+    let sxy = compensated_sum(
+        xs.iter()
+            .zip(&ys)
+            .map(|(&x, &y)| ((x - x_bar) / x_span) * (y - y_bar)),
+    );
+    let slope_k = (sxy / sxx) / x_span;
+    let intercept_scaled = y_bar - slope_k * x_bar;
+    let intercept_s0 = intercept_scaled * scale;
 
     let all_means: Vec<f64> = ordered.iter().map(|&(m, _)| m).collect();
     let c_med = sorted_quantile(&all_means, 0.50);
-    let relative_sd_pct_at_median = if c_med > 0.0 {
-        100.0 * (intercept_s0 + slope_k * c_med) / c_med
-    } else {
-        0.0
-    };
+    let relative_sd_pct_at_median = 100.0 * (y_bar + slope_k * (c_med - x_bar)) / c_med;
+    if [slope_k, intercept_s0, relative_sd_pct_at_median]
+        .iter()
+        .any(|x| !x.is_finite())
+        || relative_sd_pct_at_median < 0.0
+        || (intercept_scaled != 0.0 && intercept_s0 == 0.0)
+    {
+        return None;
+    }
 
     Some(ThompsonHowarthEstimate {
         n_pairs: pairs.len(),
+        fitted_pairs: n_bins * GROUP_SIZE,
+        unbinned_pairs: pairs.len() % GROUP_SIZE,
         n_bins,
         intercept_s0,
         slope_k,
@@ -342,6 +497,8 @@ pub enum StageDecompositionStatus {
     Identified,
     /// No valid field duplicates were provided (`C4 P12`, Porgera): stage decomposition is not identifiable.
     FieldDuplicateAbsent,
+    /// Field controls exist, but not all three stages can be estimated; absent components stay absent.
+    IncompleteStages,
     /// An upstream stage's relative variance was smaller than a downstream stage's (non-negative
     /// incremental variance violated; reported verbatim without clamping).
     NonMonotoneStageVariance,
@@ -354,11 +511,13 @@ pub struct StageVarianceDecomposition {
     pub status: StageDecompositionStatus,
     /// Per-stage precision reports present.
     pub by_stage: BTreeMap<DuplicateStage, DuplicatePrecisionReport>,
+    /// Supplied stages having no usable pairs; retained rather than silently discarded.
+    pub unavailable_stages: Vec<DuplicateStage>,
     /// Pulp (analytical) relative variance (`σ²_pulp`), if pulp duplicates exist.
     pub analytical_rel_var: Option<f64>,
     /// Coarse-reject incremental variance (`σ²_coarse - σ²_pulp`), if both exist.
     pub prep_incremental_rel_var: Option<f64>,
-    /// Field incremental variance (`σ²_field - σ²_coarse`, or `σ²_field - σ²_pulp`), if identifiable.
+    /// Field incremental variance (`σ²_field - σ²_coarse`), only when both stages exist.
     pub field_incremental_rel_var: Option<f64>,
 }
 
@@ -370,18 +529,21 @@ pub fn decompose_duplicate_stages(
     pairs: &[DuplicatePair],
     policy: &DuplicatePolicy,
 ) -> Result<StageVarianceDecomposition, QaqcError> {
+    validate_policy(policy)?;
+    validate_pairs(pairs, false)?;
     let mut grouped: BTreeMap<DuplicateStage, Vec<DuplicatePair>> = BTreeMap::new();
     for p in pairs {
         grouped.entry(p.stage).or_default().push(p.clone());
     }
 
     let mut by_stage = BTreeMap::new();
+    let mut unavailable_stages = Vec::new();
     for (stage, stage_pairs) in grouped {
         match evaluate_duplicates(&stage_pairs, policy) {
             Ok(rep) => {
                 by_stage.insert(stage, rep);
             }
-            Err(QaqcError::InsufficientData { .. }) => {}
+            Err(QaqcError::InsufficientData { .. }) => unavailable_stages.push(stage),
             Err(err) => return Err(err),
         }
     }
@@ -400,17 +562,17 @@ pub fn decompose_duplicate_stages(
         (Some(c), Some(p)) => Some(c - p),
         _ => None,
     };
-    let field_inc = match (field_v, coarse_v, pulp_v) {
-        (Some(f), Some(c), _) => Some(f - c),
-        (Some(f), None, Some(p)) => Some(f - p),
-        (Some(f), None, None) => Some(f),
-        (None, _, _) => None,
+    let field_inc = match (field_v, coarse_v) {
+        (Some(f), Some(c)) => Some(f - c),
+        _ => None,
     };
 
     let status = if field_v.is_none() {
         StageDecompositionStatus::FieldDuplicateAbsent
     } else if prep_inc.is_some_and(|v| v < 0.0) || field_inc.is_some_and(|v| v < 0.0) {
         StageDecompositionStatus::NonMonotoneStageVariance
+    } else if coarse_v.is_none() || pulp_v.is_none() {
+        StageDecompositionStatus::IncompleteStages
     } else {
         StageDecompositionStatus::Identified
     };
@@ -418,6 +580,7 @@ pub fn decompose_duplicate_stages(
     Ok(StageVarianceDecomposition {
         status,
         by_stage,
+        unavailable_stages,
         analytical_rel_var: pulp_v,
         prep_incremental_rel_var: prep_inc,
         field_incremental_rel_var: field_inc,

@@ -157,10 +157,13 @@ impl CrmMonitorConfig {
                 format!("must lie in (0, 1), got {}", self.sign_alpha),
             ));
         }
-        if self.dispersion_window < 6 {
+        if self.dispersion_window < 6 || u32::try_from(self.dispersion_window - 1).is_err() {
             return Err(QaqcError::invalid(
                 "monitor.dispersion_window",
-                format!("must be >= 6, got {}", self.dispersion_window),
+                format!(
+                    "must be >= 6 with representable chi-square degrees of freedom, got {}",
+                    self.dispersion_window
+                ),
             ));
         }
         if !(self.collapse_ratio_threshold.is_finite()
@@ -274,7 +277,7 @@ impl CrmSequentialMonitor {
     }
 
     /// Observes the next CRM value in stream order, updating the e-process and all pattern/tampering
-    /// monitors. Returns any newly emitted alarms at this step.
+    /// monitors. Returns any newly emitted alarms at this step. A refused observation changes no state.
     pub fn observe(&mut self, value: CrmStreamValue) -> Result<Vec<MonitorAlarm>, QaqcError> {
         if !value.measured.is_finite() {
             return Err(QaqcError::invalid(
@@ -283,15 +286,67 @@ impl CrmSequentialMonitor {
             ));
         }
 
-        self.n_steps += 1;
-        let step = self.n_steps;
-        let z = (value.measured - self.config.certified_mean) / self.config.reference_sd;
+        let deviation = value.measured - self.config.certified_mean;
+        let z = deviation / self.config.reference_sd;
+        if !z.is_finite() || (deviation != 0.0 && z == 0.0) {
+            return Err(QaqcError::invalid(
+                "monitor.standardized_value",
+                "standardization overflows or loses a nonzero deviation",
+            ));
+        }
+        let step = self
+            .n_steps
+            .checked_add(1)
+            .ok_or_else(|| QaqcError::invalid("monitor.steps", "observation count is exhausted"))?;
+        // Compute the prospective rolling dispersion before advancing any state. Normalizing first
+        // prevents finite extreme residuals from overflowing Welford's squared deviations.
+        let mut recent_z = self.recent_z.clone();
+        recent_z.push_back(z);
+        if recent_z.len() > self.config.dispersion_window {
+            let _ = recent_z.pop_front();
+        }
+        let mut dispersion = None;
+        if recent_z.len() == self.config.dispersion_window {
+            let scale = recent_z.iter().map(|x| x.abs()).fold(0.0_f64, f64::max);
+            let normalized: Vec<f64> = recent_z
+                .iter()
+                .map(|x| if scale == 0.0 { 0.0 } else { x / scale })
+                .collect();
+            let (_, normalized_sd) = mean_and_sample_sd(&normalized).ok_or_else(|| {
+                QaqcError::invalid("monitor.dispersion", "rolling window is too short")
+            })?;
+            let ratio_sd = scale * normalized_sd;
+            if !ratio_sd.is_finite() || (ratio_sd == 0.0 && recent_z.iter().any(|x| *x != z)) {
+                return Err(QaqcError::invalid(
+                    "monitor.dispersion",
+                    "rolling dispersion exceeds finite arithmetic",
+                ));
+            }
+            // Large dispersion cannot be a collapse, so never square its potentially huge ratio.
+            let lower_p = if ratio_sd <= self.config.collapse_ratio_threshold {
+                let df = u32::try_from(self.config.dispersion_window - 1).map_err(|_| {
+                    QaqcError::invalid("monitor.dispersion_window", "degrees of freedom overflow")
+                })?;
+                chi_square_lower_cdf(f64::from(df) * ratio_sd * ratio_sd, df)
+            } else {
+                1.0
+            };
+            if !(0.0..=1.0).contains(&lower_p) {
+                return Err(QaqcError::invalid(
+                    "monitor.dispersion",
+                    "invalid chi-square probability",
+                ));
+            }
+            dispersion = Some((ratio_sd, lower_p));
+        }
         let mut step_alarms = Vec::new();
 
         // 1. Anytime-valid log-wealth PIT betting e-process (BD-169).
         // Under H_0: X_t ~ N(mu, sigma^2), psi_t = Phi(z_t) - 0.5 ~ Uniform(-0.5, 0.5) with E[psi_t] = 0.
         let score = normal_cdf(z) - 0.5;
         let log_wealth = self.eproc.observe(score)?;
+        self.n_steps = step;
+        self.recent_z = recent_z;
         if self.eproc.rejected_null() && self.eproc_alarm_step.is_none() {
             self.eproc_alarm_step = Some(step);
             step_alarms.push(MonitorAlarm {
@@ -379,17 +434,8 @@ impl CrmSequentialMonitor {
 
         // 5. Rolling dispersion-collapse (tampering) monitor (E368, GATE-CORE-02).
         // Opens an Integrity InvestigationCase, never a recalibration.
-        self.recent_z.push_back(z);
-        if self.recent_z.len() > self.config.dispersion_window {
-            let _ = self.recent_z.pop_front();
-        }
-        if self.recent_z.len() == self.config.dispersion_window
-            && let Some((_mean, ratio_sd)) = mean_and_sample_sd(self.recent_z.make_contiguous())
-        {
+        if let Some((ratio_sd, lower_p)) = dispersion {
             self.latest_dispersion_ratio = Some(ratio_sd);
-            let df = u32::try_from(self.config.dispersion_window - 1).unwrap_or(u32::MAX);
-            let chi_sq = f64::from(df) * ratio_sd * ratio_sd;
-            let lower_p = chi_square_lower_cdf(chi_sq, df);
             if ratio_sd <= self.config.collapse_ratio_threshold
                 && lower_p <= self.config.dispersion_alpha
                 && self.dispersion_collapse_step.is_none()
