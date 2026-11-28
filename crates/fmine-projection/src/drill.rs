@@ -45,10 +45,13 @@
 //!   store keeps a text index for at most [`TEXT_INDEX_MAX_ROWS`] intervals (10⁵, where it was measured to load
 //!   and to answer a 100-hit query in 59 ms), loads it in statements of 10,000 rows, and past the limit withholds
 //!   it ([`IndexState::Withheld`]): `text` refuses and names INT-FSEARCH-001, which serves text at campaign scale.
+//! - **Shards.** One store is written by one thread. [`sharded::ShardedDrillStore`] splits the projection over
+//!   several stores, each on its own thread, commits each batch on all of them or none, and answers as one store.
 //!
 //! The store is read and written through `fsqlite::blocking::Connection` only (INT-FSQL-001 criterion 10).
 
 pub mod boxes;
+pub mod sharded;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write as _};
@@ -140,6 +143,24 @@ pub enum DrillStoreError {
         /// The schema it records.
         found: String,
     },
+    /// The store is another shard (`"<i>/<n>"`) than it is opened as, or a shard opened as a whole store, or the
+    /// reverse.
+    Shard {
+        /// The shard it records; `None` for a whole store.
+        found: Option<String>,
+        /// The shard it was opened as; `None` for a whole store.
+        expected: Option<String>,
+    },
+    /// The shards of a [`sharded::ShardedDrillStore`] hold different numbers of a cell's batches: a stop came
+    /// between their commits. Catch-up applies the batch to the shards that lack it.
+    ShardsApart {
+        /// The cell.
+        cell_id: String,
+        /// Batches the fewest shards hold.
+        behind: u64,
+        /// Batches the most shards hold.
+        ahead: u64,
+    },
     /// An index does not hold every interval: it was deferred, its rebuild stopped, or (the text index) the engine
     /// failed to write it or the store holds more intervals than it is kept for. [`DrillStore::rebuild_indexes`]
     /// reloads it.
@@ -159,12 +180,15 @@ pub enum DrillStoreError {
 }
 
 impl DrillStoreError {
-    /// The refusal this error stands for: a stale index is `FMINE-REF-502` (the index is older than the state it
-    /// would answer for); the rest are `FMINE-REF-506` (the store cannot be read or written).
+    /// The refusal this error stands for: a stale index, or shards a stop left apart, is `FMINE-REF-502` (part of
+    /// the store is older than the state it would answer for); the rest are `FMINE-REF-506` (the store cannot be
+    /// read or written).
     #[must_use]
     pub fn to_refusal(&self) -> Refusal {
         match self {
-            Self::IndexStale { .. } => Refusal::new(RefusalCode::StaleAnchor502, self.to_string()),
+            Self::IndexStale { .. } | Self::ShardsApart { .. } => {
+                Refusal::new(RefusalCode::StaleAnchor502, self.to_string())
+            }
             _ => Refusal::new(RefusalCode::InputMissingOrUnreadable506, self.to_string()),
         }
     }
@@ -178,6 +202,28 @@ impl fmt::Display for DrillStoreError {
             Self::Schema { found } => write!(
                 f,
                 "drill projection: the store holds schema '{found}', not '{SCHEMA}'; rebuild it from the ledger"
+            ),
+            Self::Shard { found, expected } => {
+                let name = |s: &Option<String>| {
+                    s.as_ref()
+                        .map_or_else(|| "a whole store".to_string(), |l| format!("shard {l}"))
+                };
+                write!(
+                    f,
+                    "drill projection: the store is {}, opened as {}; open it as it was built, or rebuild it from \
+                     the ledger",
+                    name(found),
+                    name(expected)
+                )
+            }
+            Self::ShardsApart {
+                cell_id,
+                behind,
+                ahead,
+            } => write!(
+                f,
+                "drill projection: cell '{cell_id}' is at batch {behind} on some shards and {ahead} on others; \
+                 catch up before reading"
             ),
             Self::IndexStale { index, reason } => {
                 write!(
@@ -512,6 +558,8 @@ pub struct DrillStore {
     defer: bool,
     text_limit: u64,
     counters: Counters,
+    /// The counters before the batch [`DrillStore::prepare`] left open, if one is.
+    prepared: Option<Counters>,
     #[cfg(test)]
     crash_at: std::cell::Cell<Option<u64>>,
     #[cfg(test)]
@@ -534,7 +582,7 @@ impl DrillStore {
     /// # Errors
     /// [`DrillStoreError::Schema`] for a store of another schema; [`DrillStoreError::Sql`] if the engine fails.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, DrillStoreError> {
-        Self::init(Connection::open(path).map_err(sql("open the store"))?)
+        Self::init(Connection::open(path).map_err(sql("open the store"))?, None)
     }
 
     /// A store in memory, gone when dropped.
@@ -542,10 +590,22 @@ impl DrillStore {
     /// # Errors
     /// [`DrillStoreError::Sql`] if the engine fails.
     pub fn open_in_memory() -> Result<Self, DrillStoreError> {
-        Self::init(Connection::open_in_memory().map_err(sql("open a store in memory"))?)
+        Self::init(
+            Connection::open_in_memory().map_err(sql("open a store in memory"))?,
+            None,
+        )
     }
 
-    fn init(conn: Connection) -> Result<Self, DrillStoreError> {
+    /// Open shard `label` (`"<i>/<n>"`) of a [`sharded::ShardedDrillStore`] at `path`, or in memory without one.
+    pub(crate) fn open_shard(path: Option<&Path>, label: &str) -> Result<Self, DrillStoreError> {
+        let conn = match path {
+            Some(p) => Connection::open(p).map_err(sql("open the store"))?,
+            None => Connection::open_in_memory().map_err(sql("open a store in memory"))?,
+        };
+        Self::init(conn, Some(label))
+    }
+
+    fn init(conn: Connection, shard: Option<&str>) -> Result<Self, DrillStoreError> {
         // A commit does not wait for the disk: the mark commits with the rows it covers, so a power loss that drops
         // the last batches leaves a consistent store at an earlier mark, and catch-up applies them again.
         conn.execute_batch("PRAGMA synchronous = NORMAL")
@@ -581,6 +641,15 @@ impl DrillStore {
                             params![],
                         )
                         .map_err(sql("start the counters"))
+                    })
+                    .and_then(|_| match shard {
+                        Some(label) => conn
+                            .execute(
+                                "INSERT INTO projection_meta(key, value) VALUES ('shard', ?1)",
+                                params![label],
+                            )
+                            .map_err(sql("record the shard")),
+                        None => Ok(0),
                     });
                 match created {
                     Ok(_) => conn
@@ -592,6 +661,19 @@ impl DrillStore {
                     }
                 }
             }
+        }
+        // A shard routes a share of the keys, so it is opened only as that shard of that many.
+        let held = optional(conn.query_row(
+            "SELECT value FROM projection_meta WHERE key = 'shard'",
+            params![],
+            |r| r.get::<_, String>(0),
+        ))
+        .map_err(sql("read the shard"))?;
+        if held.as_deref() != shard {
+            return Err(DrillStoreError::Shard {
+                found: held,
+                expected: shard.map(str::to_string),
+            });
         }
         // Recreate an index a stopped rebuild dropped; the store then records it as stale.
         for ddl in [CREATE_BOX_INDEX, CREATE_TEXT_INDEX] {
@@ -637,6 +719,7 @@ impl DrillStore {
             defer: false,
             text_limit: TEXT_INDEX_MAX_ROWS,
             counters,
+            prepared: None,
             #[cfg(test)]
             crash_at: std::cell::Cell::new(None),
             #[cfg(test)]
@@ -980,64 +1063,18 @@ impl DrillStore {
         cell_id: &str,
         hole_id: &str,
     ) -> Result<HoleRecords, DrillStoreError> {
-        let mut out = HoleRecords::default();
-        let on_hole = [RecordKind::Collar, RecordKind::Survey, RecordKind::Interval];
-        for (key, payload) in self.children(cell_id, &[hole_id], &on_hole)? {
-            match decode(&key, &payload)?.record {
-                DrillRecord::Collar(c) => out.collar = Some(c),
-                DrillRecord::Survey(s) => out.surveys.push(s),
-                DrillRecord::Interval(iv) => out.intervals.push(iv),
-                other => {
-                    return Err(DrillStoreError::Record {
-                        key,
-                        error: format!("the payload is {} '{}'", other.kind().code(), other.id()),
-                    });
-                }
-            }
-        }
-        let interval_ids: Vec<&str> = out
-            .intervals
-            .iter()
-            .map(|iv| iv.interval_id.as_str())
-            .collect();
-        for (key, payload) in self.children(cell_id, &interval_ids, &[RecordKind::Sample])? {
-            match decode(&key, &payload)?.record {
-                DrillRecord::Sample(s) => out.samples.push(s),
-                _ => {
-                    return Err(DrillStoreError::Record {
-                        key,
-                        error: "a sample key holds another record".to_string(),
-                    });
-                }
-            }
-        }
-        let sample_ids: Vec<&str> = out.samples.iter().map(|s| s.sample_id.as_str()).collect();
-        for (key, payload) in self.children(cell_id, &sample_ids, &[RecordKind::AssayResult])? {
-            match decode(&key, &payload)?.record {
-                DrillRecord::AssayResult(r) => out.results.push(r),
-                _ => {
-                    return Err(DrillStoreError::Record {
-                        key,
-                        error: "a result key holds another record".to_string(),
-                    });
-                }
-            }
-        }
-        out.surveys.sort_by(|a, b| a.survey_id.cmp(&b.survey_id));
-        out.intervals
-            .sort_by(|a, b| a.interval_id.cmp(&b.interval_id));
-        out.samples.sort_by(|a, b| a.sample_id.cmp(&b.sample_id));
-        out.results.sort_by(|a, b| a.result_id.cmp(&b.result_id));
-        Ok(out)
+        hole_records_through(hole_id, |parents, kinds| {
+            self.children(cell_id, parents, kinds)
+        })
     }
 
-    /// Key and payload of every record of `cell_id` of one of `kinds` whose parent is one of `parents`.
-    fn children(
+    /// Key and current record of every record of `cell_id` of one of `kinds` whose parent is one of `parents`.
+    pub(crate) fn children(
         &self,
         cell_id: &str,
         parents: &[&str],
         kinds: &[RecordKind],
-    ) -> Result<Vec<(String, Vec<u8>)>, DrillStoreError> {
+    ) -> Result<Vec<(String, DrillRecord)>, DrillStoreError> {
         let codes: Vec<&str> = kinds.iter().map(|k| k.code()).collect();
         let mut out = Vec::new();
         for chunk in parents.chunks(KEYS_PER_LOOKUP) {
@@ -1060,7 +1097,16 @@ impl DrillStore {
                     .collect::<Result<Vec<_>, _>>()
                 })
                 .map_err(sql("read a hole's records"))?;
-            out.extend(rows);
+            for (key, payload) in rows {
+                let record = decode(&key, &payload)?.record;
+                if parse_key(&key).map(|(kind, _)| kind) != Some(record.kind()) {
+                    return Err(DrillStoreError::Record {
+                        key,
+                        error: format!("the payload is {} '{}'", record.kind().code(), record.id()),
+                    });
+                }
+                out.push((key, record));
+            }
         }
         Ok(out)
     }
@@ -1217,16 +1263,83 @@ impl DrillStore {
                 self.step();
                 Ok(())
             }
-            Err(e) => {
-                self.counters = counters;
-                match self.conn.execute_batch("ROLLBACK") {
-                    Ok(()) => Err(e),
-                    Err(r) => Err(DrillStoreError::Sql {
-                        what: "roll back",
-                        error: format!("{r}, after: {e}"),
-                    }),
-                }
+            Err(e) => Err(self.roll_back(counters, e)),
+        }
+    }
+
+    /// Roll the open transaction back after `e`, restoring the counters it began with.
+    fn roll_back(&mut self, counters: Counters, e: DrillStoreError) -> DrillStoreError {
+        self.counters = counters;
+        match self.conn.execute_batch("ROLLBACK") {
+            Ok(()) => e,
+            Err(r) => DrillStoreError::Sql {
+                what: "roll back",
+                error: format!("{r}, after: {e}"),
+            },
+        }
+    }
+
+    /// Write `batch` and `mark` in a transaction left open for [`DrillStore::finish`], or roll it back and return
+    /// why. A text the engine cannot write (module documentation) marks the text index failed, and the batch is
+    /// written again without it.
+    pub(crate) fn prepare(
+        &mut self,
+        batch: &DeltaBatch,
+        mark: &HighWaterMark,
+    ) -> Result<(), DrillStoreError> {
+        match self.begin_batch(batch, mark) {
+            Err(e @ DrillStoreError::Sql { what: ADD_TEXT, .. }) => {
+                self.text_failed(&e)?;
+                self.begin_batch(batch, mark)
             }
+            done => done,
+        }
+    }
+
+    fn begin_batch(
+        &mut self,
+        batch: &DeltaBatch,
+        mark: &HighWaterMark,
+    ) -> Result<(), DrillStoreError> {
+        if self.prepared.is_some() {
+            return Err(DrillStoreError::Sql {
+                what: "begin a batch",
+                error: "another batch is prepared and not finished".to_string(),
+            });
+        }
+        self.conn.execute_batch("BEGIN").map_err(sql("begin"))?;
+        self.step();
+        let counters = self.counters;
+        match self.apply_batch(batch, mark) {
+            Ok(()) => {
+                self.prepared = Some(counters);
+                Ok(())
+            }
+            Err(e) => Err(self.roll_back(counters, e)),
+        }
+    }
+
+    /// Commit the batch [`DrillStore::prepare`] left open (`true`), or roll it back (`false`).
+    pub(crate) fn finish(&mut self, commit: bool) -> Result<(), DrillStoreError> {
+        let Some(counters) = self.prepared.take() else {
+            return Err(DrillStoreError::Sql {
+                what: "finish a batch",
+                error: "no batch is prepared".to_string(),
+            });
+        };
+        if !commit {
+            self.counters = counters;
+            return self
+                .conn
+                .execute_batch("ROLLBACK")
+                .map_err(sql("roll back"));
+        }
+        match self.conn.execute_batch("COMMIT").map_err(sql("commit")) {
+            Ok(()) => {
+                self.step();
+                Ok(())
+            }
+            Err(e) => Err(self.roll_back(counters, e)),
         }
     }
 
@@ -1874,19 +1987,59 @@ impl DrillStore {
     }
 }
 
+/// One hole's records ([`DrillStore::hole_records`]) through `children`, which gives the key and record of each
+/// record of one of the given kinds whose parent is one of the given ids. A key it gives twice is taken once.
+pub(crate) fn hole_records_through(
+    hole_id: &str,
+    mut children: impl FnMut(
+        &[&str],
+        &[RecordKind],
+    ) -> Result<Vec<(String, DrillRecord)>, DrillStoreError>,
+) -> Result<HoleRecords, DrillStoreError> {
+    let mut out = HoleRecords::default();
+    let mut seen = BTreeSet::new();
+    let on_hole = [RecordKind::Collar, RecordKind::Survey, RecordKind::Interval];
+    for (key, record) in children(&[hole_id], &on_hole)? {
+        if !seen.insert(key) {
+            continue;
+        }
+        match record {
+            DrillRecord::Collar(c) => out.collar = Some(c),
+            DrillRecord::Survey(s) => out.surveys.push(s),
+            DrillRecord::Interval(iv) => out.intervals.push(iv),
+            _ => {}
+        }
+    }
+    let interval_ids: Vec<&str> = out
+        .intervals
+        .iter()
+        .map(|iv| iv.interval_id.as_str())
+        .collect();
+    for (key, record) in children(&interval_ids, &[RecordKind::Sample])? {
+        if let (true, DrillRecord::Sample(s)) = (seen.insert(key), record) {
+            out.samples.push(s);
+        }
+    }
+    let sample_ids: Vec<&str> = out.samples.iter().map(|s| s.sample_id.as_str()).collect();
+    for (key, record) in children(&sample_ids, &[RecordKind::AssayResult])? {
+        if let (true, DrillRecord::AssayResult(r)) = (seen.insert(key), record) {
+            out.results.push(r);
+        }
+    }
+    out.surveys.sort_by(|a, b| a.survey_id.cmp(&b.survey_id));
+    out.intervals
+        .sort_by(|a, b| a.interval_id.cmp(&b.interval_id));
+    out.samples.sort_by(|a, b| a.sample_id.cmp(&b.sample_id));
+    out.results.sort_by(|a, b| a.result_id.cmp(&b.result_id));
+    Ok(out)
+}
+
 impl Projector for DrillStore {
     type Error = DrillStoreError;
 
     fn apply(&mut self, batch: &DeltaBatch, mark: &HighWaterMark) -> Result<(), DrillStoreError> {
-        match self.in_transaction(|s| s.apply_batch(batch, mark)) {
-            // The engine cannot write this text (module documentation): record that, then apply the batch without
-            // the text index.
-            Err(e @ DrillStoreError::Sql { what: ADD_TEXT, .. }) => {
-                self.text_failed(&e)?;
-                self.in_transaction(|s| s.apply_batch(batch, mark))
-            }
-            done => done,
-        }
+        self.prepare(batch, mark)?;
+        self.finish(true)
     }
 
     fn stored_marks(&self) -> Result<BTreeMap<String, HighWaterMark>, DrillStoreError> {

@@ -29,8 +29,9 @@ use fmine_ledger::batch::DeltaOp;
 use fmine_ledger::cell::CellLease;
 use fmine_ledger::l0::L0Ledger;
 
+use super::sharded::ShardedDrillStore;
 use super::*;
-use crate::projection::Projection;
+use crate::projection::{Projection, Projector};
 
 const CELL: &str = "CELL-SITE(drill-projection)";
 const CRS: &str = "EPSG:32735";
@@ -322,9 +323,9 @@ fn reference_hole_records<'a>(
     }
     for record in records.clone() {
         if let DrillRecord::Sample(s) = record
-            && s.interval_ids.first().is_some_and(|first| {
-                out.intervals.iter().any(|iv| iv.interval_id == *first)
-            })
+            && s.interval_ids
+                .first()
+                .is_some_and(|first| out.intervals.iter().any(|iv| iv.interval_id == *first))
         {
             out.samples.push(s.clone());
         }
@@ -337,7 +338,8 @@ fn reference_hole_records<'a>(
         }
     }
     out.surveys.sort_by(|a, b| a.survey_id.cmp(&b.survey_id));
-    out.intervals.sort_by(|a, b| a.interval_id.cmp(&b.interval_id));
+    out.intervals
+        .sort_by(|a, b| a.interval_id.cmp(&b.interval_id));
     out.samples.sort_by(|a, b| a.sample_id.cmp(&b.sample_id));
     out.results.sort_by(|a, b| a.result_id.cmp(&b.result_id));
     out
@@ -492,7 +494,62 @@ fn text_rows(store: &DrillStore) -> BTreeMap<i64, String> {
 /// The store holds exactly `want`. While the R-tree is current it holds a row covering each located box under the
 /// interval's current R-tree id; while the text index is current it holds each interval's text under its current
 /// text id; and every other row of a current index is counted as garbage.
-fn assert_holds(store: &DrillStore, want: &Expected, context: &str) {
+/// The answers a whole store and a sharded one both give, so one set of checks covers both. Each method is the
+/// store's own.
+trait Answers {
+    fn record_keys(&self) -> Result<Vec<(String, String)>, DrillStoreError>;
+    fn record(&self, cell_id: &str, key: &str) -> Result<Option<StoredRecord>, DrillStoreError>;
+    fn intervals(&self) -> Result<Vec<IntervalRow>, DrillStoreError>;
+    fn unlocated_holes(&self) -> Result<Vec<UnlocatedHole>, DrillStoreError>;
+    fn holes(&self) -> Result<Vec<(String, String)>, DrillStoreError>;
+    fn hole_records(&self, cell_id: &str, hole_id: &str) -> Result<HoleRecords, DrillStoreError>;
+    fn bbox(&self, crs: &str, query: &Box3) -> Result<Vec<IntervalRef>, DrillStoreError>;
+    fn text(&self, query: &str) -> Result<Vec<IntervalRef>, DrillStoreError>;
+}
+
+macro_rules! answers {
+    ($store:ty) => {
+        impl Answers for $store {
+            fn record_keys(&self) -> Result<Vec<(String, String)>, DrillStoreError> {
+                <$store>::record_keys(self)
+            }
+            fn record(
+                &self,
+                cell_id: &str,
+                key: &str,
+            ) -> Result<Option<StoredRecord>, DrillStoreError> {
+                <$store>::record(self, cell_id, key)
+            }
+            fn intervals(&self) -> Result<Vec<IntervalRow>, DrillStoreError> {
+                <$store>::intervals(self)
+            }
+            fn unlocated_holes(&self) -> Result<Vec<UnlocatedHole>, DrillStoreError> {
+                <$store>::unlocated_holes(self)
+            }
+            fn holes(&self) -> Result<Vec<(String, String)>, DrillStoreError> {
+                <$store>::holes(self)
+            }
+            fn hole_records(
+                &self,
+                cell_id: &str,
+                hole_id: &str,
+            ) -> Result<HoleRecords, DrillStoreError> {
+                <$store>::hole_records(self, cell_id, hole_id)
+            }
+            fn bbox(&self, crs: &str, query: &Box3) -> Result<Vec<IntervalRef>, DrillStoreError> {
+                <$store>::bbox(self, crs, query)
+            }
+            fn text(&self, query: &str) -> Result<Vec<IntervalRef>, DrillStoreError> {
+                <$store>::text(self, query)
+            }
+        }
+    };
+}
+answers!(DrillStore);
+answers!(ShardedDrillStore<'_>);
+
+/// The store's records, interval rows, unlocated holes, hole listing and each hole's records are the reference's.
+fn assert_answers(store: &impl Answers, want: &Expected, context: &str) {
     let keys = store.record_keys().unwrap();
     assert_eq!(
         keys,
@@ -524,6 +581,11 @@ fn assert_holds(store: &DrillStore, want: &Expected, context: &str) {
             "{context}: records of {hole}"
         );
     }
+}
+
+/// [`assert_answers`], and the index rows are those of the store's intervals plus the garbage it counts.
+fn assert_holds(store: &DrillStore, want: &Expected, context: &str) {
+    assert_answers(store, want, context);
     let states = store.index_states().unwrap();
     let garbage = store.index_garbage();
     if states.texts == IndexState::Current {
@@ -628,7 +690,7 @@ fn queries(want: &Expected, rng: &mut Rng) -> Vec<(String, Box3)> {
 
 /// Every interval whose box meets `query` in `crs`: no phantom answers and no missing ones (criterion 4).
 fn assert_bbox_answers(
-    store: &DrillStore,
+    store: &impl Answers,
     want: &Expected,
     queries: &[(String, Box3)],
     context: &str,
@@ -660,7 +722,7 @@ fn tokens(text: &str) -> Vec<String> {
         .collect()
 }
 
-fn assert_text_answers(store: &DrillStore, want: &Expected, context: &str) {
+fn assert_text_answers(store: &impl Answers, want: &Expected, context: &str) {
     let mut vocabulary: Vec<String> = LITHOLOGY
         .iter()
         .chain(&MINERALIZATION)
@@ -966,11 +1028,23 @@ fn lab_paperwork(dispatch_id: &str, certificate_id: &str, sample_ids: &[&str]) -
 }
 
 /// A hole's records follow their parents. Moving an interval takes the samples that start on it, and their results,
-/// to its new hole; a sample relinked to an interval of another hole takes its results there. After each batch the
-/// store answers as the definition does for every hole, one never recorded included, and the ids below say what
-/// moved.
+/// to its new hole; a sample relinked to an interval of another hole takes its results there. After each batch a
+/// whole store and a store of one or three shards answer as the definition does for every hole, one never recorded
+/// included, and the ids below say what moved.
 #[test]
 fn test_a_holes_records_follow_their_intervals_and_samples() {
+    assert_lab_campaign(DrillStore::open_in_memory().unwrap(), "whole store");
+    for shards in [1, 3] {
+        let context = format!("{shards} shards");
+        ShardedDrillStore::with_shards_in_memory(shards, |store| {
+            assert_lab_campaign(store, &context);
+        })
+        .unwrap();
+    }
+}
+
+/// The campaign of [`test_a_holes_records_follow_their_intervals_and_samples`], fed to `store`.
+fn assert_lab_campaign<S: Projector + Answers>(store: S, context: &str) {
     let mut ledger = L0Ledger::new();
     let lease = ledger.create_cell(CELL, "node-1").unwrap();
     let mut rng = Rng(7);
@@ -1028,18 +1102,36 @@ fn test_a_holes_records_follow_their_intervals_and_samples() {
     // (samples, results) of H0 and H1 after each batch.
     let ids = |r: &HoleRecords| {
         (
-            r.samples.iter().map(|s| s.sample_id.clone()).collect::<Vec<_>>(),
-            r.results.iter().map(|x| x.result_id.clone()).collect::<Vec<_>>(),
+            r.samples
+                .iter()
+                .map(|s| s.sample_id.clone())
+                .collect::<Vec<_>>(),
+            r.results
+                .iter()
+                .map(|x| x.result_id.clone())
+                .collect::<Vec<_>>(),
         )
     };
     let v = |s: &[&str]| s.iter().map(|x| (*x).to_string()).collect::<Vec<_>>();
     let stated = [
-        [(v(&["P1", "P2"]), v(&["R1", "R2"])), (v(&["P5"]), v(&["R5"]))],
-        [(v(&["P2"]), v(&["R2"])), (v(&["P1", "P5"]), v(&["R1", "R5"]))],
-        [(v(&[]), v(&[])), (v(&["P1", "P2", "P5"]), v(&["R1", "R2", "R5", "R7"]))],
-        [(v(&["P6"]), v(&["R6"])), (v(&["P1", "P2", "P5"]), v(&["R1", "R2", "R5", "R7"]))],
+        [
+            (v(&["P1", "P2"]), v(&["R1", "R2"])),
+            (v(&["P5"]), v(&["R5"])),
+        ],
+        [
+            (v(&["P2"]), v(&["R2"])),
+            (v(&["P1", "P5"]), v(&["R1", "R5"])),
+        ],
+        [
+            (v(&[]), v(&[])),
+            (v(&["P1", "P2", "P5"]), v(&["R1", "R2", "R5", "R7"])),
+        ],
+        [
+            (v(&["P6"]), v(&["R6"])),
+            (v(&["P1", "P2", "P5"]), v(&["R1", "R2", "R5", "R7"])),
+        ],
     ];
-    let mut projection = Projection::open(DrillStore::open_in_memory().unwrap()).unwrap();
+    let mut projection = Projection::open(store).unwrap();
     let mut held: BTreeMap<String, DrillRecord> = BTreeMap::new();
     for (k, changes) in batches.iter().enumerate() {
         commit(&mut ledger, &lease, changes).unwrap();
@@ -1053,17 +1145,20 @@ fn test_a_holes_records_follow_their_intervals_and_samples() {
             assert_eq!(
                 store.hole_records(CELL, hole).unwrap(),
                 reference_hole_records(held.values(), hole),
-                "batch {k}: {hole}"
+                "{context} batch {k}: {hole}"
             );
         }
         for (h, want) in stated[k].iter().enumerate() {
             assert_eq!(
                 &ids(&store.hole_records(CELL, &hole_id(h)).unwrap()),
                 want,
-                "batch {k}: H{h}"
+                "{context} batch {k}: H{h}"
             );
         }
-        assert_eq!(store.hole_records(CELL, "H9").unwrap(), HoleRecords::default());
+        assert_eq!(
+            store.hole_records(CELL, "H9").unwrap(),
+            HoleRecords::default()
+        );
     }
 }
 
@@ -1810,4 +1905,334 @@ fn test_two_versions_of_a_record_in_one_batch_apply_in_order() {
             assert_eq!(store.index_garbage(), want_garbage, "{context}");
         }
     }
+}
+
+/// After every batch of the seeded campaigns, a store of one shard and a store of three answer as the reference
+/// does: records, interval rows, holes and their records, bbox answers against brute force and text answers against
+/// a token scan. Each of the three shards holds intervals, so the answers are merged ones.
+#[test]
+fn test_a_sharded_store_matches_the_reference_after_every_batch() {
+    for shards in [1, 3] {
+        for seed in [1, 2, 3, 4] {
+            let campaign = Campaign::new(seed, 28);
+            ShardedDrillStore::with_shards_in_memory(shards, |store| {
+                assert_eq!(store.shards(), shards);
+                let mut projection = Projection::open(store).unwrap();
+                let mut rng = Rng(seed ^ 0xF00D);
+                for (k, batch) in campaign.batches().iter().enumerate() {
+                    projection.feed(batch).unwrap();
+                    let want = expected(&campaign.states[k + 1]);
+                    let context = format!("{shards} shards, seed {seed} batch {k}");
+                    let store = projection.projector();
+                    assert_answers(store, &want, &context);
+                    assert_bbox_answers(store, &want, &queries(&want, &mut rng), &context);
+                    assert_text_answers(store, &want, &context);
+                    assert!(store.indexes_are_current().unwrap(), "{context}");
+                }
+                let store = projection.projector();
+                assert_eq!(
+                    projection.mark(CELL).applied,
+                    campaign.ledger.committed_count(CELL).unwrap()
+                );
+                for i in 0..shards {
+                    assert_eq!(
+                        store.shard_marks(i).unwrap(),
+                        projection.anchor().marks,
+                        "seed {seed}: shard {i}'s marks"
+                    );
+                    assert!(
+                        store.shard_intervals(i).unwrap() > 0,
+                        "seed {seed}: shard {i} of {shards} holds no interval"
+                    );
+                }
+            })
+            .unwrap();
+        }
+    }
+}
+
+/// A sharded store fed with its indexes deferred refuses bbox and text queries, and once every shard rebuilds them
+/// it answers as the reference does and keeps up batch by batch after that.
+#[test]
+fn test_a_sharded_store_rebuilt_after_deferring_matches_the_reference() {
+    let campaign = Campaign::new(7, 30);
+    let batches = campaign.batches();
+    ShardedDrillStore::with_shards_in_memory(3, |mut store| {
+        store.defer_indexes(true).unwrap();
+        let mut projection = Projection::open(store).unwrap();
+        projection.catch_up(&batches[..20]).unwrap();
+        let any = Box3::new([0.0; 3], [1e7; 3]).unwrap();
+        let refused = projection.projector().bbox(CRS, &any).unwrap_err();
+        assert_eq!(refused, stale(Index::Boxes));
+        assert_eq!(refused.to_refusal().code, "FMINE-REF-502");
+        assert_eq!(
+            projection.projector().text("schist").unwrap_err(),
+            stale(Index::Texts)
+        );
+        assert!(!projection.projector().indexes_are_current().unwrap());
+        let mut store = projection.into_projector();
+        let current = IndexStates {
+            boxes: IndexState::Current,
+            texts: IndexState::Current,
+        };
+        assert_eq!(store.rebuild_indexes().unwrap(), current);
+        assert_eq!(store.index_garbage().unwrap(), IndexGarbage::default());
+        store.defer_indexes(false).unwrap();
+        let mut projection = Projection::open(store).unwrap();
+        for at in [20, 30] {
+            if at == 30 {
+                projection.catch_up_with(&campaign.ledger, CELL).unwrap();
+            }
+            let want = expected(&campaign.states[at]);
+            let context = format!("rebuilt at 20, fed to {at}");
+            let store = projection.projector();
+            assert_answers(store, &want, &context);
+            assert_bbox_answers(store, &want, &queries(&want, &mut Rng(at as u64)), &context);
+            assert_text_answers(store, &want, &context);
+            assert_eq!(store.index_states().unwrap(), current, "{context}");
+        }
+    })
+    .unwrap();
+}
+
+/// A batch that one shard refuses is written on none: the other shards write their share, then roll it back. Every
+/// shard keeps its mark and the answers stay those before the batch.
+#[test]
+fn test_a_batch_one_shard_refuses_moves_no_shard() {
+    const SHARDS: usize = 3;
+    let mut rng = Rng(5);
+    let mut ledger = L0Ledger::new();
+    let lease = ledger.create_cell(CELL, "node-1").unwrap();
+    let first = collar(0, &mut rng);
+    commit(
+        &mut ledger,
+        &lease,
+        &[Change::Put(DrillRecord::Collar(first.clone()))],
+    )
+    .unwrap();
+    // A collar (every shard), an interval of a shard other than 0, and a key shard 0 cannot read.
+    let iv = (0..INTERVALS)
+        .map(|i| interval(i, 0, &mut rng))
+        .find(|iv| {
+            sharded::shard_of(&record_key(RecordKind::Interval, &iv.interval_id), SHARDS) != 0
+        })
+        .unwrap();
+    let mut deltas = fmine_drill::store::delta_ops(&[
+        Change::Put(DrillRecord::Collar(collar(1, &mut rng))),
+        Change::Put(DrillRecord::Interval(iv)),
+    ])
+    .unwrap();
+    deltas.push(DeltaOp::new(
+        "drill/widget/1",
+        DeltaKind::Put,
+        b"not a drill record".to_vec(),
+    ));
+    deltas.sort();
+    let batch = fmine_drill::store::batch_for(&ledger, CELL, lease.epoch, deltas).unwrap();
+    ledger.commit(&lease, batch).unwrap();
+    let batches = ledger.batches(CELL).unwrap();
+
+    let mut held = BTreeMap::new();
+    held.insert(
+        record_key(RecordKind::Collar, "H0"),
+        Held {
+            version: RecordVersion {
+                record: DrillRecord::Collar(first),
+                correction: None,
+            },
+            versions: 1,
+            seq: 0,
+        },
+    );
+    let want = expected(&held);
+    ShardedDrillStore::with_shards_in_memory(SHARDS, |store| {
+        let mut projection = Projection::open(store).unwrap();
+        projection.feed(&batches[0]).unwrap();
+        let before: Vec<_> = (0..SHARDS)
+            .map(|i| projection.projector().shard_marks(i).unwrap())
+            .collect();
+        let err = projection.feed(&batches[1]).unwrap_err();
+        assert_eq!(err.to_refusal().code, "FMINE-REF-506", "{err}");
+        assert!(err.to_string().contains("drill/widget/1"), "{err}");
+        assert_eq!(projection.mark(CELL).applied, 1);
+        for (i, marks) in before.iter().enumerate() {
+            assert_eq!(
+                &projection.projector().shard_marks(i).unwrap(),
+                marks,
+                "shard {i}"
+            );
+        }
+        assert_answers(projection.projector(), &want, "after the refusal");
+        assert!(projection.projector().indexes_are_current().unwrap());
+    })
+    .unwrap();
+}
+
+/// A stop between the shards' commits leaves one shard a batch ahead. Until the rest hold that batch, every answer
+/// is refused with `FMINE-REF-502`; catch-up then applies it to the rest, the shard that holds it skips it, and the
+/// store answers as the reference does. The same holds after the store is closed and reopened at that point.
+#[test]
+fn test_a_stop_between_shard_commits_is_finished_by_catch_up() {
+    const SHARDS: usize = 3;
+    const STOP: u64 = 6;
+    let campaign = Campaign::new(3, 12);
+    let batches = campaign.batches();
+    let apart = DrillStoreError::ShardsApart {
+        cell_id: CELL.to_string(),
+        behind: STOP,
+        ahead: STOP + 1,
+    };
+    assert_eq!(apart.to_refusal().code, "FMINE-REF-502");
+    // Catch up from the stop, then check the answers and that every shard holds the store's marks.
+    let finish = |mut projection: Projection<ShardedDrillStore<'_>>, context: &str| {
+        let fed = projection.catch_up(batches).unwrap();
+        assert_eq!(fed, batches.len() as u64 - STOP, "{context}");
+        let want = expected(&campaign.states[batches.len()]);
+        let store = projection.projector();
+        assert_answers(store, &want, context);
+        assert_bbox_answers(store, &want, &queries(&want, &mut Rng(12)), context);
+        for i in 0..SHARDS {
+            assert_eq!(
+                store.shard_marks(i).unwrap(),
+                projection.anchor().marks,
+                "{context}: shard {i}"
+            );
+        }
+    };
+    for reopen in [false, true] {
+        let dir = scratch("sharded-stop").with_file_name("shards");
+        ShardedDrillStore::with_shards_at(&dir, SHARDS, |store| {
+            let mut projection = Projection::open(store).unwrap();
+            projection.catch_up(&batches[..STOP as usize]).unwrap();
+            let mut store = projection.into_projector();
+            store.commit_only(Some(1));
+            let mut projection = Projection::open(store).unwrap();
+            let err = projection.feed(&batches[STOP as usize]).unwrap_err();
+            assert!(err.to_string().contains("stopped after 1 commits"), "{err}");
+            assert_eq!(projection.mark(CELL).applied, STOP);
+            let mut applied: Vec<u64> = (0..SHARDS)
+                .map(|i| projection.projector().shard_marks(i).unwrap()[CELL].applied)
+                .collect();
+            applied.sort_unstable();
+            assert_eq!(applied, [STOP, STOP, STOP + 1]);
+            let store = projection.projector();
+            assert_eq!(store.record_keys().unwrap_err(), apart);
+            assert_eq!(store.intervals().unwrap_err(), apart);
+            assert_eq!(store.hole_records(CELL, "H0").unwrap_err(), apart);
+            let any = Box3::new([0.0; 3], [1e7; 3]).unwrap();
+            assert_eq!(store.bbox(CRS, &any).unwrap_err(), apart);
+            if !reopen {
+                finish(projection, "not reopened");
+            }
+        })
+        .unwrap();
+        if reopen {
+            ShardedDrillStore::with_shards_at(&dir, SHARDS, |store| {
+                let projection = Projection::open(store).unwrap();
+                assert_eq!(projection.mark(CELL).applied, STOP);
+                assert_eq!(projection.projector().holes().unwrap_err(), apart);
+                finish(projection, "reopened");
+            })
+            .unwrap();
+        }
+    }
+}
+
+/// Shard `i` of `n` opens only as that shard: as a shard of another count, or as a whole store, it is refused, the
+/// caller's work does not run and a refused open creates no shard. A whole store does not open as a shard, and a
+/// store of no shards is refused. Opened as built, it answers as before.
+#[test]
+fn test_a_shard_is_opened_only_as_itself() {
+    let campaign = Campaign::new(2, 4);
+    let dir = scratch("sharded-count").with_file_name("shards");
+    ShardedDrillStore::with_shards_at(&dir, 2, |store| {
+        let mut projection = Projection::open(store).unwrap();
+        projection.catch_up(campaign.batches()).unwrap();
+    })
+    .unwrap();
+    for n in [1, 3] {
+        let mut ran = false;
+        let err = ShardedDrillStore::with_shards_at(&dir, n, |_| ran = true).unwrap_err();
+        assert!(!ran);
+        assert_eq!(
+            err,
+            DrillStoreError::Shard {
+                found: Some("0/2".to_string()),
+                expected: Some(format!("0/{n}")),
+            }
+        );
+        assert_eq!(err.to_refusal().code, "FMINE-REF-506");
+    }
+    assert!(!dir.join("shard-2.db").exists());
+    assert_eq!(
+        DrillStore::open(dir.join("shard-1.db")).unwrap_err(),
+        DrillStoreError::Shard {
+            found: Some("1/2".to_string()),
+            expected: None,
+        }
+    );
+    let whole = scratch("sharded-whole").with_file_name("shards");
+    std::fs::create_dir_all(&whole).unwrap();
+    drop(DrillStore::open(whole.join("shard-0.db")).unwrap());
+    assert_eq!(
+        ShardedDrillStore::with_shards_at(&whole, 1, |_| ()).unwrap_err(),
+        DrillStoreError::Shard {
+            found: None,
+            expected: Some("0/1".to_string()),
+        }
+    );
+    assert!(
+        ShardedDrillStore::with_shards_in_memory(0, |_| ())
+            .unwrap_err()
+            .to_string()
+            .contains("at least one shard")
+    );
+    ShardedDrillStore::with_shards_at(&dir, 2, |store| {
+        let projection = Projection::open(store).unwrap();
+        assert_eq!(projection.mark(CELL).applied, 4);
+        assert_answers(
+            projection.projector(),
+            &expected(&campaign.states[4]),
+            "reopened",
+        );
+    })
+    .unwrap();
+}
+
+/// `prepare` leaves a batch open that `finish` commits or rolls back whole: rolled back, the store and its marks
+/// are as before; committed, they are the batch's. A second prepare, or a finish with nothing prepared, is refused.
+#[test]
+fn test_a_prepared_batch_commits_or_rolls_back_whole() {
+    let campaign = Campaign::new(4, 3);
+    let batches = campaign.batches();
+    let mut projection = Projection::open(DrillStore::open_in_memory().unwrap()).unwrap();
+    projection.feed(&batches[0]).unwrap();
+    let mut store = projection.into_projector();
+    let mark = HighWaterMark {
+        applied: 2,
+        head: batches[1].batch_digest().unwrap(),
+    };
+    let before = store.stored_marks().unwrap();
+    store.prepare(&batches[1], &mark).unwrap();
+    assert!(
+        store
+            .prepare(&batches[1], &mark)
+            .unwrap_err()
+            .to_string()
+            .contains("another batch is prepared")
+    );
+    store.finish(false).unwrap();
+    assert_eq!(store.stored_marks().unwrap(), before);
+    assert_holds(&store, &expected(&campaign.states[1]), "rolled back");
+    assert!(
+        store
+            .finish(false)
+            .unwrap_err()
+            .to_string()
+            .contains("no batch is prepared")
+    );
+    store.prepare(&batches[1], &mark).unwrap();
+    store.finish(true).unwrap();
+    assert_eq!(store.stored_marks().unwrap()[CELL], mark);
+    assert_holds(&store, &expected(&campaign.states[2]), "committed");
 }
