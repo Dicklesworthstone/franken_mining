@@ -303,7 +303,7 @@ impl<P: Projector> Projection<P> {
             });
         }
         for cell_id in ledger.cell_ids() {
-            replacement.catch_up_with(ledger, cell_id)?;
+            replacement.catch_up(ledger.batches(cell_id)?)?;
         }
         replacement.answer_current(ledger, |_| ())?;
         Ok(replacement)
@@ -397,13 +397,20 @@ impl<P: Projector> Projection<P> {
     ///
     /// # Errors
     /// [`ProjectionError::Source`] for an unknown cell, [`ProjectionError::Diverged`]
-    /// for a non-prefix mark, then as [`Projection::catch_up`].
+    /// for a non-prefix mark or disagreement with the persisted mark, then as [`Projection::catch_up`].
     pub fn catch_up_with(
         &mut self,
         ledger: &L0Ledger,
         cell_id: &str,
     ) -> Result<u64, ProjectionError> {
-        if self.status(ledger, cell_id)? == Status::Diverged {
+        if self.status(ledger, cell_id)? == Status::Diverged
+            || self
+                .projector
+                .stored_marks()
+                .map_err(|e| store_error(&e))?
+                .get(cell_id)
+                != self.anchor.marks.get(cell_id)
+        {
             return Err(ProjectionError::Diverged {
                 cell_id: cell_id.to_string(),
             });

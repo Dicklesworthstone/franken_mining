@@ -467,6 +467,30 @@ fn test_current_answer_checks_every_cell_and_the_persisted_marks() {
 }
 
 #[test]
+fn test_catch_up_rechecks_the_persisted_prefix_before_any_write() {
+    let mut cells = Cells::new();
+    cells.commit(A, "lot/1", "dry_t=100");
+    let mut projection = Projection::rebuild(&cells.ledger, KeyIndex::default()).unwrap();
+    let original = projection.projector().state();
+    let anchor = projection.anchor().clone();
+    projection.projector().hide_marks.set(true);
+    assert_eq!(
+        projection.catch_up_with(&cells.ledger, A),
+        Err(ProjectionError::Diverged { cell_id: A.into() })
+    );
+    cells.commit(A, "lot/2", "dry_t=200");
+    assert_eq!(
+        projection.catch_up_with(&cells.ledger, A),
+        Err(ProjectionError::Diverged { cell_id: A.into() })
+    );
+    assert_eq!(projection.anchor(), &anchor);
+    assert_eq!(projection.projector().state(), original);
+    projection.projector().hide_marks.set(false);
+    assert_eq!(projection.catch_up_with(&cells.ledger, A).unwrap(), 1);
+    assert_eq!(projection.mark(A), cells.head(A));
+}
+
+#[test]
 fn test_ledger_catch_up_refuses_a_nonprefix_even_without_a_suffix() {
     let cells = five_in_a();
     for applied in [5, 6] {

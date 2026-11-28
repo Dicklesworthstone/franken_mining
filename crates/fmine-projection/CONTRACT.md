@@ -21,6 +21,8 @@ The projector framework (`BD-120`, plan §26.1) and its first production project
 - `mark::Status` of a cell against the ledger or a segment's digests: `Current`, `Behind { by }` or `Diverged`.
 - A freshness-required read through `Projection::answer_current` compares persisted marks with the
   open projection's anchor and every cell of the authority ledger before invoking the read.
+- `Projection::catch_up_with` checks the existing cell mark against the authority prefix and the store
+  before selecting a suffix, including when the cell has no pending batches.
 - A replacement through `Projection::rebuild` replays every cell into an empty projector and checks its anchor.
   The native `Projection::rebuild_drill_in` creates a new directory with its own `drill.db` and sidecars.
   An unsuccessful replay may leave staging data for inspection.
