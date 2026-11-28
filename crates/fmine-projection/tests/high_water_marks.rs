@@ -29,6 +29,7 @@ struct KeyIndex {
     marks: BTreeMap<String, HighWaterMark>,
     fail_at: Option<(String, u64)>,
     forget_marks: bool,
+    hide_marks: std::cell::Cell<bool>,
 }
 
 impl KeyIndex {
@@ -64,7 +65,11 @@ impl Projector for KeyIndex {
     }
 
     fn stored_marks(&self) -> Result<BTreeMap<String, HighWaterMark>, String> {
-        Ok(self.marks.clone())
+        Ok(if self.hide_marks.get() {
+            BTreeMap::new()
+        } else {
+            self.marks.clone()
+        })
     }
 }
 
@@ -88,6 +93,10 @@ impl Cells {
 
     /// Commit one batch to `cell` that puts `key` with `payload`.
     fn commit(&mut self, cell: &str, key: &str, payload: &str) -> Digest32 {
+        self.commit_bytes(cell, key, payload.as_bytes().to_vec())
+    }
+
+    fn commit_bytes(&mut self, cell: &str, key: &str, payload: Vec<u8>) -> Digest32 {
         let lease = &self.leases[cell];
         let seq = self.ledger.committed_count(cell).unwrap();
         let prev_hash = self.ledger.head_hash(cell).unwrap();
@@ -109,11 +118,7 @@ impl Cells {
                 residency_epoch: 1,
                 state_root: prev_hash,
             },
-            deltas: vec![DeltaOp::new(
-                key,
-                DeltaKind::Put,
-                payload.as_bytes().to_vec(),
-            )],
+            deltas: vec![DeltaOp::new(key, DeltaKind::Put, payload)],
             witnesses: Vec::new(),
             cross_cell_refs: Vec::new(),
         };
@@ -415,4 +420,146 @@ fn test_a_segment_on_disk_projects_like_the_l0_ledger() {
     assert_eq!(from_disk.status(&cells.ledger, A).unwrap(), Status::Current);
     assert_eq!(from_disk.projector().state(), from_l0.projector().state());
     assert_eq!(from_disk.mark(A).head, inspection.head_hash);
+}
+
+#[test]
+fn test_current_answer_checks_every_cell_and_the_persisted_marks() {
+    let mut cells = Cells::new();
+    cells.commit(A, "lot/1", "dry_t=100");
+    let mut p = Projection::rebuild(&cells.ledger, KeyIndex::default()).unwrap();
+    assert_eq!(
+        p.answer_current(&cells.ledger, |idx| idx.live.len())
+            .unwrap()
+            .value,
+        1
+    );
+
+    cells.commit(B, "lot/2", "dry_t=200");
+    assert_eq!(
+        p.answer(|idx| idx.live.len()).value,
+        1,
+        "historical reads still work"
+    );
+    let error = p
+        .answer_current::<()>(&cells.ledger, |_| panic!("must refuse before reading"))
+        .unwrap_err();
+    assert_eq!(
+        error,
+        ProjectionError::Behind {
+            cell_id: B.into(),
+            by: 1
+        }
+    );
+    assert_eq!(code(&error), "FMINE-REF-502");
+    assert_eq!(p.catch_up_with(&cells.ledger, B).unwrap(), 1);
+    assert_eq!(
+        p.answer_current(&cells.ledger, |idx| idx.live.len())
+            .unwrap()
+            .value,
+        2
+    );
+
+    p.projector().hide_marks.set(true);
+    let error = p
+        .answer_current::<()>(&cells.ledger, |_| panic!("must refuse before reading"))
+        .unwrap_err();
+    assert_eq!(code(&error), "FMINE-REF-505");
+}
+
+#[test]
+fn test_ledger_catch_up_refuses_a_nonprefix_even_without_a_suffix() {
+    let cells = five_in_a();
+    for applied in [5, 6] {
+        let mut p = Projection::open(KeyIndex {
+            marks: BTreeMap::from([(
+                A.into(),
+                HighWaterMark {
+                    applied,
+                    head: Digest32([42; 32]),
+                },
+            )]),
+            ..KeyIndex::default()
+        })
+        .unwrap();
+        assert_eq!(p.status(&cells.ledger, A).unwrap(), Status::Diverged);
+        let old = p.mark(A);
+        assert_eq!(
+            code(&p.catch_up_with(&cells.ledger, A).unwrap_err()),
+            "FMINE-REF-505"
+        );
+        assert_eq!(p.mark(A), old);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn test_native_drill_projection_refuses_corruption_and_rebuilds_without_overwriting() {
+    use fmine_drill::records::{
+        Collar, DrillRecord, HoleType, Position, PositionMethod, encode_version,
+    };
+    use fmine_projection::drill::DrillStore;
+
+    const KEY: &str = "drill/collar/H1";
+    let record = |program: &str| {
+        DrillRecord::Collar(Collar {
+            hole_id: "H1".into(),
+            hole_type: HoleType::Diamond,
+            program: program.into(),
+            planned: Some(Position {
+                crs: "EPSG:32735".into(),
+                easting_m: 421_000.0,
+                northing_m: 8_652_100.0,
+                elevation_m: 1_300.0,
+                method: PositionMethod::Design,
+                sigma_horizontal_m: 1.0,
+                sigma_vertical_m: 1.0,
+            }),
+            actual: None,
+        })
+    };
+    let expected = record("authority infill");
+    let other = record("wrong history");
+    let mut cells = Cells::new();
+    cells.commit_bytes(A, KEY, encode_version(&expected, None).unwrap());
+    cells.commit(B, "notes/1", "also required for a current pad");
+    let mut fork = Cells::new();
+    fork.commit_bytes(A, KEY, encode_version(&other, None).unwrap());
+
+    let old_path = scratch("corrupt").with_extension("db");
+    let new_dir = old_path.with_file_name("replacement");
+    let mut wrong = Projection::open(DrillStore::open(&old_path).unwrap()).unwrap();
+    wrong.catch_up_with(&fork.ledger, A).unwrap();
+    drop(wrong);
+    let mut wrong = Projection::open(DrillStore::open(&old_path).unwrap()).unwrap();
+    assert_eq!(wrong.mark(A).applied, cells.head(A).applied);
+    assert_eq!(
+        code(&wrong.catch_up_with(&cells.ledger, A).unwrap_err()),
+        "FMINE-REF-505"
+    );
+    let failed = wrong
+        .answer_current::<()>(&cells.ledger, |_| panic!("must refuse before reading"))
+        .unwrap_err();
+    assert_eq!(code(&failed), "FMINE-REF-505");
+    assert!(Projection::rebuild_drill_in(&cells.ledger, old_path.parent().unwrap()).is_err());
+
+    let replacement = Projection::rebuild_drill_in(&cells.ledger, &new_dir).unwrap();
+    drop(replacement);
+    let rebuilt = Projection::open(DrillStore::open(new_dir.join("drill.db")).unwrap()).unwrap();
+    let current = rebuilt
+        .answer_current(&cells.ledger, |db| db.record(A, KEY))
+        .unwrap();
+    assert_eq!(current.value.unwrap().unwrap().version.record, expected);
+    assert_eq!(current.anchor.mark(A), cells.head(A));
+    assert_eq!(current.anchor.mark(B), cells.head(B));
+    assert_eq!(
+        wrong
+            .projector()
+            .record(A, KEY)
+            .unwrap()
+            .unwrap()
+            .version
+            .record,
+        other
+    );
+    assert_eq!(wrong.mark(A), fork.head(A));
 }

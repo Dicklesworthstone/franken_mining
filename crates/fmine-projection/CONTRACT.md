@@ -19,6 +19,11 @@ The projector framework (`BD-120`, plan §26.1) and its first production project
 - `mark::HighWaterMark` per cell (batches applied and the last one's digest) and `mark::Anchor`, the vector of them (FMT-ANCHOR-1's `(cell, seq, digest)` marks, plan §6.3).
 - `mark::Stamped<T>`: an answer with the anchor it was read at.
 - `mark::Status` of a cell against the ledger or a segment's digests: `Current`, `Behind { by }` or `Diverged`.
+- A freshness-required read through `Projection::answer_current` compares persisted marks with the
+  open projection's anchor and every cell of the authority ledger before invoking the read.
+- A replacement through `Projection::rebuild` replays every cell into an empty projector and checks its anchor.
+  The native `Projection::rebuild_drill_in` creates a new directory with its own `drill.db` and sidecars.
+  An unsuccessful replay may leave staging data for inspection.
 - `drill::DrillStore` answers: `bbox(crs, box)` (the intervals whose box meets a query box), `text(fts5_query)`, `record(cell, key)` (current version, version count and the batch that wrote it), `hole_records(cell, hole)` (the hole's collar, surveys and intervals, the samples whose first interval is one of them and the results of those samples), `holes()` (the collared holes), `intervals()`, `unlocated_holes()` (collared holes with no trace, and why), `index_garbage()`, and `index_states()`: each index current, stale, failed with the engine's message, or (text) withheld past its row limit.
 - `drill::sharded::ShardedDrillStore` lives for one call, `with_shards_at(dir, n, body)` or `with_shards_in_memory(n, body)`, which runs `body` with the store and joins the shards' threads before it returns (no detached worker, INT-AS-001 criterion 9). It answers the same questions as `DrillStore`, merged over its shards: a record from its key's shard, `holes()` and `unlocated_holes()` from shard 0, the rest gathered from every shard and sorted as `DrillStore` sorts them. `index_states()` gives the worst state over the shards and `index_garbage()` their sum.
 - `drill::boxes::interval_box`: the axis-aligned box covering a desurveyed trace between two depths.
@@ -48,6 +53,9 @@ The projector framework (`BD-120`, plan §26.1) and its first production project
 - `ProjectionError::Gap` → `FMINE-REF-502` (a batch past the next one).
 - `ProjectionError::ChainBreak` and `ProjectionError::MarkNotRecorded` → `FMINE-REF-505` (a fork or a diverged projection; a store that did not keep its mark).
 - `ProjectionError::Store` → `FMINE-REF-506` (the projector's store failed).
+- `ProjectionError::Behind` → `FMINE-REF-502` for a freshness-required read, and
+  `ProjectionError::Diverged` → `FMINE-REF-505` for a non-prefix mark. Equal-height shard forks
+  refuse store reads and mark aggregation (`DrillStoreError::ShardFork`, `FMINE-REF-505`).
 - `ProjectionError::Ledger` and `ProjectionError::Source` keep the ledger's codes.
 - `drill::DrillStoreError::IndexStale { index, reason }` → `FMINE-REF-502`: that index was deferred or its rebuild stopped, or (text) the engine failed to write it or the store is past the text limit; its queries refuse, with the engine's message or the limit when there is one. `drill::DrillStoreError::ShardsApart { cell_id, behind, ahead }` → `FMINE-REF-502`: a sharded store's shards hold different numbers of the cell's batches, so its answers refuse until catch-up. `Sql`, `Record` (a drill key whose payload is another record, or no drill kind), `Schema` (another schema's store), `Shard` (a shard opened as another shard or as a whole store, or the reverse) and `Range` → `FMINE-REF-506`. Through `Projection::feed` a drill error is `ProjectionError::Store`.
 
@@ -60,6 +68,8 @@ Derived views; never evidence or authority (plan §26.1). An answer's anchor nam
 ## 8. Validity domain
 - One authority log per cell, as `fmine-ledger` commits it. Quarantined lower-epoch batches are not projected.
 - Batches before the last applied one are skipped without a digest check. `status` compares the whole chain through the mark's head digest.
+- Freshness checks use a caller-owned projection and an immutable authority snapshot. They check applied
+  positions and digests. Individual index reads retain their own availability and integrity checks.
 
 ## 9. Oracles
 - The ledger's own head hashes and `prev_hash_at`, and a segment's verified batch digests.
@@ -72,7 +82,6 @@ Derived views; never evidence or authority (plan §26.1). An answer's anchor nam
 - `drill` index rows are append-only. A changed box or text leaves its old row as garbage (`index_garbage`) until `rebuild_indexes`, because deleting rows from fsqlite 0.5.1's R-tree or FTS5 costs a pass over the whole index. Each statement that writes the R-tree copies it, so a batch writes it in few statements.
 - `drill` projects collars, surveys and intervals into tables; samples and assay results are reached through `hole_records`, and dispatches, certificates and QA/QC records only by key (`record`). None has a table of its own yet.
 - `ShardedDrillStore` applies the text row limit to each shard's own FTS5 index, so `n` shards keep text for up to `n` times as many intervals as one store. Its stop between commits is tested in process (a test switch commits the batch on one shard and rolls back the rest), not by killing the process as the single-store crash tests do.
-- Discard-and-rebuild on `Diverged` and freshness-required refusals for queries are `BD-122` (F5). This crate reports the status they act on.
 - Multi-segment logs: a projection catches up from one segment's batches at a time.
 
 ## 11. Public API
@@ -83,6 +92,9 @@ Derived views; never evidence or authority (plan §26.1). An answer's anchor nam
 - `drill::boxes::{Box3, interval_box, ROUNDING_M}`
 
 ## 12. Proof obligations
+- `BD-122` (F5): `test_native_drill_projection_refuses_corruption_and_rebuilds_without_overwriting`,
+  `test_current_answer_checks_every_cell_and_the_persisted_marks`, and
+  `test_ledger_catch_up_refuses_a_nonprefix_even_without_a_suffix` in `tests/high_water_marks.rs`.
 - `BD-120` (HWM tests, `tests/high_water_marks.rs`): `high_water_marks::test_marks_follow_the_ledger_batch_by_batch_across_cells`, `high_water_marks::test_replays_are_skipped_and_gaps_and_forks_move_no_mark`, `high_water_marks::test_status_reports_behind_current_and_diverged`, `high_water_marks::test_a_restarted_projection_resumes_from_its_stores_marks`, `high_water_marks::test_a_failed_or_unrecorded_apply_moves_no_mark`, `high_water_marks::test_a_segment_on_disk_projects_like_the_l0_ledger`.
 - `BD-121` (fsqlite drill projection, INT-FSQL-001, `src/drill/tests.rs`, `src/drill/boxes.rs`, `tests/drill_scale.rs`): `drill::tests::test_the_store_matches_the_reference_after_every_batch`, `drill::tests::test_a_deferred_rebuild_equals_the_incremental_store`, `drill::tests::test_rebuilding_the_indexes_drops_their_garbage_and_keeps_every_answer`, `drill::tests::test_a_holes_records_follow_their_intervals_and_samples`, `drill::tests::test_replaying_a_prefix_gives_the_projection_as_of_it`, `drill::tests::test_a_store_on_disk_resumes_after_reopen`, `drill::tests::test_a_crash_at_any_write_leaves_a_batch_wholly_applied_or_absent`, `drill::tests::test_a_crash_in_an_index_rebuild_leaves_them_current_or_refusing`, `drill::tests::test_a_malformed_drill_record_is_refused_and_changes_nothing`, `drill::tests::test_a_store_of_another_schema_is_refused`, `drill::tests::test_a_text_index_the_engine_cannot_write_fails_alone`, `drill::tests::test_a_text_index_past_its_limit_is_withheld_and_the_rest_goes_on`, `drill::boxes::tests::test_every_point_of_a_curved_trace_lies_in_its_box`, `drill_scale::test_bbox_p99_over_ten_million_intervals` (ignored; release; `docs/delivery/INT-FSQL-001.md`).
 - `BD-173` (the sharded drill projection GATE-CORE-01 ingests through, `src/drill/sharded.rs`, `src/drill/tests.rs`): `drill::sharded::tests::test_routing_sends_collars_and_surveys_everywhere_and_the_rest_to_one_shard`, `drill::tests::test_a_sharded_store_matches_the_reference_after_every_batch`, `drill::tests::test_a_sharded_store_rebuilt_after_deferring_matches_the_reference`, `drill::tests::test_a_batch_one_shard_refuses_moves_no_shard`, `drill::tests::test_a_stop_between_shard_commits_is_finished_by_catch_up`, `drill::tests::test_a_shard_is_opened_only_as_itself`, `drill::tests::test_a_prepared_batch_commits_or_rolls_back_whole`, `drill::tests::test_a_holes_records_follow_their_intervals_and_samples`.

@@ -418,6 +418,11 @@ impl L0Ledger {
         Self::default()
     }
 
+    /// Authority cell IDs, in canonical order, including cells at genesis.
+    pub fn cell_ids(&self) -> impl Iterator<Item = &str> {
+        self.cells.keys().map(String::as_str)
+    }
+
     /// Create a new authority cell with genesis writer lease at `epoch = 1`.
     pub fn create_cell(
         &mut self,

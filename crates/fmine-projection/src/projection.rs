@@ -14,7 +14,8 @@
 //!   After a failed apply, the in-memory marks are reread from the store, which is what the projection holds.
 //! - **Against the log.** [`Projection::status`] compares a cell's mark with an L0 ledger, and
 //!   [`Projection::status_in`] with the digests of a segment ([`Status`]). Answers carry the marks they were read
-//!   at ([`Projection::answer`]).
+//!   at ([`Projection::answer`]). A caller can require every cell to be current before reading
+//!   ([`Projection::answer_current`]) or replay the authority into a fresh store ([`Projection::rebuild`]).
 //!
 //! A projection is derived and never consulted as truth: it can always be discarded and rebuilt from the log.
 
@@ -87,6 +88,18 @@ pub enum ProjectionError {
         /// The mark it holds.
         stored: HighWaterMark,
     },
+    /// The saved mark names a different history or store state (`FMINE-REF-505`).
+    Diverged {
+        /// The affected cell.
+        cell_id: String,
+    },
+    /// A freshness-required answer is missing authority batches (`FMINE-REF-502`).
+    Behind {
+        /// The affected cell.
+        cell_id: String,
+        /// How many batches remain to be applied.
+        by: u64,
+    },
     /// The projector's store failed (`FMINE-REF-506`).
     Store {
         /// Its error, as text.
@@ -103,8 +116,10 @@ impl ProjectionError {
     #[must_use]
     pub fn to_refusal(&self) -> Refusal {
         match self {
-            Self::Gap { .. } => Refusal::new(RefusalCode::StaleAnchor502, self.to_string()),
-            Self::ChainBreak { .. } | Self::MarkNotRecorded { .. } => {
+            Self::Gap { .. } | Self::Behind { .. } => {
+                Refusal::new(RefusalCode::StaleAnchor502, self.to_string())
+            }
+            Self::ChainBreak { .. } | Self::MarkNotRecorded { .. } | Self::Diverged { .. } => {
                 Refusal::new(RefusalCode::DigestMismatch505, self.to_string())
             }
             Self::Store { .. } => {
@@ -144,6 +159,14 @@ impl fmt::Display for ProjectionError {
             } => write!(
                 f,
                 "cell '{cell_id}': the projector was given mark {expected:?} and stored {stored:?}"
+            ),
+            Self::Diverged { cell_id } => write!(
+                f,
+                "cell '{cell_id}': saved projection mark diverged; rebuild from the authority ledger"
+            ),
+            Self::Behind { cell_id, by } => write!(
+                f,
+                "cell '{cell_id}': projection is {by} batches behind; catch up to the authority ledger"
             ),
             Self::Store { detail } => write!(f, "projection store: {detail}"),
             Self::Ledger(e) => e.fmt(f),
@@ -222,6 +245,68 @@ impl<P: Projector> Projection<P> {
             value: read(&self.projector),
             anchor: self.anchor.clone(),
         }
+    }
+
+    /// Read only after checking the stored anchor against every cell of `ledger`.
+    /// The store may still refuse an individual index read. The caller must
+    /// hold the same single-writer ownership as for `feed`.
+    ///
+    /// # Errors
+    /// The read closure does not run if marks cannot be read, differ from the
+    /// in-memory anchor, are behind, or name a cell or history outside `ledger`.
+    pub fn answer_current<T>(
+        &self,
+        ledger: &L0Ledger,
+        read: impl FnOnce(&P) -> T,
+    ) -> Result<Stamped<T>, ProjectionError> {
+        let marks = self.projector.stored_marks().map_err(|e| store_error(&e))?;
+        for cell_id in marks.keys().chain(self.anchor.marks.keys()) {
+            if marks.get(cell_id) != self.anchor.marks.get(cell_id)
+                || ledger.committed_count(cell_id).is_err()
+            {
+                return Err(ProjectionError::Diverged {
+                    cell_id: cell_id.clone(),
+                });
+            }
+        }
+        for cell_id in ledger.cell_ids() {
+            match self.status(ledger, cell_id)? {
+                Status::Current => {}
+                Status::Behind { by } => {
+                    return Err(ProjectionError::Behind {
+                        cell_id: cell_id.to_string(),
+                        by,
+                    });
+                }
+                Status::Diverged => {
+                    return Err(ProjectionError::Diverged {
+                        cell_id: cell_id.to_string(),
+                    });
+                }
+            }
+        }
+        Ok(self.answer(read))
+    }
+
+    /// Replay every authority cell into a newly initialized, empty projector.
+    /// The caller owns the replacement and is responsible for supplying an
+    /// empty store. The old projection can remain available for inspection.
+    ///
+    /// # Errors
+    /// Refuses a replacement with existing marks. A replay or validation
+    /// failure returns no replacement and may leave incomplete staging data.
+    pub fn rebuild(ledger: &L0Ledger, empty: P) -> Result<Self, ProjectionError> {
+        let mut replacement = Self::open(empty)?;
+        if let Some(cell_id) = replacement.anchor.marks.keys().next() {
+            return Err(ProjectionError::Store {
+                detail: format!("replacement must be new and empty; found a mark for '{cell_id}'"),
+            });
+        }
+        for cell_id in ledger.cell_ids() {
+            replacement.catch_up_with(ledger, cell_id)?;
+        }
+        replacement.answer_current(ledger, |_| ())?;
+        Ok(replacement)
     }
 
     /// Apply `batch` if it is the next one of its cell; see the module documentation.
@@ -311,15 +396,26 @@ impl<P: Projector> Projection<P> {
     /// Catch `cell_id` up with `ledger`.
     ///
     /// # Errors
-    /// [`ProjectionError::Source`] for an unknown cell, then as [`Projection::catch_up`].
+    /// [`ProjectionError::Source`] for an unknown cell, [`ProjectionError::Diverged`]
+    /// for a non-prefix mark, then as [`Projection::catch_up`].
     pub fn catch_up_with(
         &mut self,
         ledger: &L0Ledger,
         cell_id: &str,
     ) -> Result<u64, ProjectionError> {
+        if self.status(ledger, cell_id)? == Status::Diverged {
+            return Err(ProjectionError::Diverged {
+                cell_id: cell_id.to_string(),
+            });
+        }
         let batches = ledger.batches(cell_id)?;
-        let from = usize::try_from(self.mark(cell_id).applied).unwrap_or(usize::MAX);
-        self.catch_up(batches.get(from..).unwrap_or(&[]))
+        let from = usize::try_from(self.mark(cell_id).applied)
+            .ok()
+            .and_then(|index| batches.get(index..))
+            .ok_or_else(|| ProjectionError::Diverged {
+                cell_id: cell_id.to_string(),
+            })?;
+        self.catch_up(from)
     }
 
     /// Where `cell_id`'s mark stands against `ledger`.
@@ -349,5 +445,26 @@ impl<P: Projector> Projection<P> {
     #[must_use]
     pub fn status_in(&self, cell_id: &str, digests: &[Digest32]) -> Status {
         Status::of(self.mark(cell_id), digests)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Projection<crate::drill::DrillStore> {
+    /// Rebuild into `drill.db` inside a newly created directory. A new
+    /// directory isolates the replacement from any existing store or sidecar.
+    ///
+    /// # Errors
+    /// An existing path, a creation or store failure, or an error during replay.
+    pub fn rebuild_drill_in(
+        ledger: &L0Ledger,
+        directory: impl AsRef<std::path::Path>,
+    ) -> Result<Self, ProjectionError> {
+        let directory = directory.as_ref();
+        std::fs::create_dir(directory).map_err(|e| ProjectionError::Store {
+            detail: format!("create replacement directory {}: {e}", directory.display()),
+        })?;
+        let store = crate::drill::DrillStore::open(directory.join("drill.db"))
+            .map_err(|e| store_error(&e))?;
+        Self::rebuild(ledger, store)
     }
 }

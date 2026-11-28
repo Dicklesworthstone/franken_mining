@@ -161,6 +161,13 @@ pub enum DrillStoreError {
         /// Batches the most shards hold.
         ahead: u64,
     },
+    /// Shards disagree on the digest at the same committed batch count.
+    ShardFork {
+        /// The cell.
+        cell_id: String,
+        /// The committed batch count where the digests disagree.
+        applied: u64,
+    },
     /// An index does not hold every interval: it was deferred, its rebuild stopped, or (the text index) the engine
     /// failed to write it or the store holds more intervals than it is kept for. [`DrillStore::rebuild_indexes`]
     /// reloads it.
@@ -181,13 +188,16 @@ pub enum DrillStoreError {
 
 impl DrillStoreError {
     /// The refusal this error stands for: a stale index, or shards a stop left apart, is `FMINE-REF-502` (part of
-    /// the store is older than the state it would answer for); the rest are `FMINE-REF-506` (the store cannot be
-    /// read or written).
+    /// the store is older than the state it would answer for). A shard fork is `FMINE-REF-505`. Other store
+    /// failures are `FMINE-REF-506`.
     #[must_use]
     pub fn to_refusal(&self) -> Refusal {
         match self {
             Self::IndexStale { .. } | Self::ShardsApart { .. } => {
                 Refusal::new(RefusalCode::StaleAnchor502, self.to_string())
+            }
+            Self::ShardFork { .. } => {
+                Refusal::new(RefusalCode::DigestMismatch505, self.to_string())
             }
             _ => Refusal::new(RefusalCode::InputMissingOrUnreadable506, self.to_string()),
         }
@@ -224,6 +234,10 @@ impl fmt::Display for DrillStoreError {
                 f,
                 "drill projection: cell '{cell_id}' is at batch {behind} on some shards and {ahead} on others; \
                  catch up before reading"
+            ),
+            Self::ShardFork { cell_id, applied } => write!(
+                f,
+                "drill projection: cell '{cell_id}' has different shard digests at {applied} batches; rebuild from the ledger"
             ),
             Self::IndexStale { index, reason } => {
                 write!(

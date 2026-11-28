@@ -15,6 +15,7 @@
 //!   between the commits leaves some shards one batch ahead. Until the rest hold it too, every answer is refused
 //!   ([`DrillStoreError::ShardsApart`], `FMINE-REF-502`), so no answer mixes two states. The store's mark is the
 //!   lowest of its shards', so catch-up offers that batch again, and a shard that holds it already skips it.
+//!   Shards with different digests at the same height refuse reads and mark aggregation.
 //! - **Answers merge.** A record is read from its key's shard. Interval listings and bbox and text answers are the
 //!   shards' together, sorted. A hole's records gather its intervals, their samples and those samples' results from
 //!   every shard. An index is current only when it is current on every shard. The text index limit
@@ -281,10 +282,13 @@ impl ShardedDrillStore<'_> {
     fn in_step(&self) -> Result<(), DrillStoreError> {
         let cells: BTreeSet<&String> = self.marks.iter().flat_map(BTreeMap::keys).collect();
         for cell in cells {
-            let applied =
-                |m: &BTreeMap<String, HighWaterMark>| m.get(cell).map_or(0, |h| h.applied);
-            let behind = self.marks.iter().map(applied).min().unwrap_or(0);
-            let ahead = self.marks.iter().map(applied).max().unwrap_or(0);
+            let (lowest, ahead) = mark_span(
+                cell,
+                self.marks
+                    .iter()
+                    .map(|m| m.get(cell).copied().unwrap_or_default()),
+            )?;
+            let behind = lowest.applied;
             if behind != ahead {
                 return Err(DrillStoreError::ShardsApart {
                     cell_id: cell.clone(),
@@ -621,11 +625,10 @@ impl Projector for ShardedDrillStore<'_> {
         let cells: BTreeSet<&String> = all.iter().flat_map(BTreeMap::keys).collect();
         let mut out = BTreeMap::new();
         for cell in cells {
-            let lowest = all
-                .iter()
-                .map(|m| m.get(cell).copied().unwrap_or_default())
-                .min_by_key(|m| m.applied)
-                .unwrap_or_default();
+            let (lowest, _) = mark_span(
+                cell,
+                all.iter().map(|m| m.get(cell).copied().unwrap_or_default()),
+            )?;
             if lowest.applied > 0 {
                 out.insert(cell.clone(), lowest);
             }
@@ -634,9 +637,64 @@ impl Projector for ShardedDrillStore<'_> {
     }
 }
 
+/// Return the span of a cell across shards, retaining the digest of the lowest
+/// mark for replay. Equal batch counts must name the same committed history.
+fn mark_span(
+    cell_id: &str,
+    marks: impl Iterator<Item = HighWaterMark>,
+) -> Result<(HighWaterMark, u64), DrillStoreError> {
+    let mut by_height = BTreeMap::new();
+    for mark in marks {
+        if let Some(previous) = by_height.insert(mark.applied, mark)
+            && previous != mark
+        {
+            return Err(DrillStoreError::ShardFork {
+                cell_id: cell_id.to_string(),
+                applied: mark.applied,
+            });
+        }
+    }
+    let lowest = by_height
+        .first_key_value()
+        .map(|(_, mark)| *mark)
+        .unwrap_or_default();
+    let highest = by_height.last_key_value().map_or(0, |(&height, _)| height);
+    Ok((lowest, highest))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_shard_mark_span_refuses_equal_height_with_different_digests() {
+        use fmine_core::hash::Digest32;
+        let prefix = HighWaterMark {
+            applied: 1,
+            head: Digest32([1; 32]),
+        };
+        let head = HighWaterMark {
+            applied: 2,
+            head: Digest32([2; 32]),
+        };
+        let fork = HighWaterMark {
+            applied: 2,
+            head: Digest32([3; 32]),
+        };
+        assert_eq!(
+            mark_span("a", [head, prefix, head].into_iter()).unwrap(),
+            (prefix, 2)
+        );
+        let error = mark_span("a", [head, prefix, fork].into_iter()).unwrap_err();
+        assert_eq!(
+            error,
+            DrillStoreError::ShardFork {
+                cell_id: "a".into(),
+                applied: 2
+            }
+        );
+        assert_eq!(error.to_refusal().code, "FMINE-REF-505");
+    }
 
     #[test]
     fn test_routing_sends_collars_and_surveys_everywhere_and_the_rest_to_one_shard() {
