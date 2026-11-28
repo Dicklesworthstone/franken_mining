@@ -351,6 +351,15 @@ fn period_model(
 /// # Errors
 /// Refuses invalid periods, arrivals or caps, infeasible stock limits, and uncertified exact solutions.
 pub fn solve_horizon(horizon: Horizon<'_>) -> Result<HorizonRouting, Refusal> {
+    try_solve_horizon(horizon)?
+        .ok_or_else(|| domain("no routing can satisfy the declared stockpile and processing caps"))
+}
+
+/// Solve a fixed horizon in a comparison of alternatives, returning `None` for infeasibility.
+///
+/// # Errors
+/// Refuses invalid inputs and uncertified exact solutions. Neither is a rejected alternative.
+pub fn try_solve_horizon(horizon: Horizon<'_>) -> Result<Option<HorizonRouting>, Refusal> {
     let Horizon {
         parcels,
         periods,
@@ -431,12 +440,11 @@ pub fn solve_horizon(horizon: Horizon<'_>) -> Result<HorizonRouting, Refusal> {
         }
         start = end;
     }
-    let optimum = maximize_nonnegative(&rows, &rhs, &objective).map_err(|error| match error {
-        LinearMaximumError::Infeasible => {
-            domain("no routing can satisfy the declared stockpile and processing caps")
-        }
-        LinearMaximumError::Uncertified(reason) => numerical(reason),
-    })?;
+    let optimum = match maximize_nonnegative(&rows, &rhs, &objective) {
+        Ok(optimum) => optimum,
+        Err(LinearMaximumError::Infeasible) => return Ok(None),
+        Err(LinearMaximumError::Uncertified(reason)) => return Err(numerical(reason)),
+    };
     let idle = optimum.objective == ZERO && nonnegative(rhs);
     let mut stock: Vec<_> = parcels.iter().map(|p| p.available_dry_tonnes).collect();
     let mut total = Allocation::ZERO;
@@ -453,11 +461,11 @@ pub fn solve_horizon(horizon: Horizon<'_>) -> Result<HorizonRouting, Refusal> {
         total.add(result.total)?;
         results.push(result);
     }
-    Ok(HorizonRouting {
+    Ok(Some(HorizonRouting {
         periods: results,
         total,
         discounted_contribution: optimum.objective,
-    })
+    }))
 }
 
 fn period_result(

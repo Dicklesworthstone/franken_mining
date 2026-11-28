@@ -1,0 +1,87 @@
+{
+  "schema": "fmine.route-blend-horizon.v1",
+  "currency": "USD",
+  "metal": "Au",
+  "metal_unit": "g",
+  "ore_mass_basis": "dry_metric_tonne",
+  "ownership_basis": "100_percent_project",
+  "evidence": "synthetic",
+  "analytes": ["carbonate"],
+  "parcels": [
+    { "id": "high-carbonate", "available_dry_tonnes": "2", "grade_per_dry_tonne": "2", "assays": { "carbonate": "0.12" } },
+    { "id": "low-carbonate", "available_dry_tonnes": "0", "grade_per_dry_tonne": "2", "assays": { "carbonate": "0.04" } }
+  ],
+  "campaign": { "route_modes": ["alkaline", "acid"], "initial_mode": "alkaline", "switch_cost": "40" },
+  "periods": [
+    {
+      "id": "week-1",
+      "discount_factor": "1",
+      "arrivals": [],
+      "market_recovered_metal_cap": "8",
+      "price_per_metal_unit": "50",
+      "selling_cost_per_metal_unit": "0",
+      "routes": [
+        { "id": "alkaline", "dry_tonnes_cap": "2", "milling_cost_per_dry_tonne": "0",
+          "assay_windows": { "carbonate": { "min": "0.12" } },
+          "pairs": [
+            { "parcel": "high-carbonate", "recovery_fraction": "1", "haul_cost_per_dry_tonne": "0" },
+            { "parcel": "low-carbonate", "recovery_fraction": "1", "haul_cost_per_dry_tonne": "0" }
+          ] },
+        { "id": "acid", "dry_tonnes_cap": "2", "milling_cost_per_dry_tonne": "0",
+          "assay_windows": { "carbonate": { "max": "0.04" } },
+          "pairs": [
+            { "parcel": "high-carbonate", "recovery_fraction": "1", "haul_cost_per_dry_tonne": "0" },
+            { "parcel": "low-carbonate", "recovery_fraction": "1", "haul_cost_per_dry_tonne": "0" }
+          ] }
+      ]
+    },
+    {
+      "id": "week-2",
+      "discount_factor": "0.8",
+      "arrivals": [{ "parcel": "low-carbonate", "dry_tonnes": "2" }],
+      "market_recovered_metal_cap": "8",
+      "price_per_metal_unit": "100",
+      "selling_cost_per_metal_unit": "0",
+      "routes": [
+        { "id": "alkaline", "dry_tonnes_cap": "2", "milling_cost_per_dry_tonne": "0",
+          "assay_windows": { "carbonate": { "min": "0.12" } },
+          "pairs": [
+            { "parcel": "high-carbonate", "recovery_fraction": "1", "haul_cost_per_dry_tonne": "0" },
+            { "parcel": "low-carbonate", "recovery_fraction": "1", "haul_cost_per_dry_tonne": "0" }
+          ] },
+        { "id": "acid", "dry_tonnes_cap": "2", "milling_cost_per_dry_tonne": "0",
+          "assay_windows": { "carbonate": { "max": "0.04" } },
+          "pairs": [
+            { "parcel": "high-carbonate", "recovery_fraction": "1", "haul_cost_per_dry_tonne": "0" },
+            { "parcel": "low-carbonate", "recovery_fraction": "1", "haul_cost_per_dry_tonne": "0" }
+          ] }
+      ]
+    },
+    {
+      "id": "week-3",
+      "discount_factor": "0.5",
+      "arrivals": [],
+      "market_recovered_metal_cap": "8",
+      "price_per_metal_unit": "150",
+      "selling_cost_per_metal_unit": "0",
+      "routes": [
+        { "id": "alkaline", "dry_tonnes_cap": "2", "milling_cost_per_dry_tonne": "0",
+          "assay_windows": { "carbonate": { "min": "0.12" } },
+          "pairs": [
+            { "parcel": "high-carbonate", "recovery_fraction": "1", "haul_cost_per_dry_tonne": "0" },
+            { "parcel": "low-carbonate", "recovery_fraction": "1", "haul_cost_per_dry_tonne": "0" }
+          ] },
+        { "id": "acid", "dry_tonnes_cap": "1", "milling_cost_per_dry_tonne": "0",
+          "assay_windows": { "carbonate": { "max": "0.04" } },
+          "pairs": [
+            { "parcel": "high-carbonate", "recovery_fraction": "1", "haul_cost_per_dry_tonne": "0" },
+            { "parcel": "low-carbonate", "recovery_fraction": "1", "haul_cost_per_dry_tonne": "0" }
+          ] }
+      ]
+    }
+  ],
+  "capacity_options": [
+    { "id": "week-3-acid-expansion", "kind": "route_throughput", "period": "week-3", "route": "acid",
+      "increase": "1", "present_value_cost": "10" }
+  ]
+}
