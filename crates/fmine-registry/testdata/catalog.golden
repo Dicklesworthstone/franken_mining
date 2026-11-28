@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 102
+[verbs] 103
 decide card
 decide production
 decide investment
@@ -175,4 +175,5 @@ drill qaqc
 drill blanks
 drill duplicates
 drill monitor
+drill censored
 metrics roce

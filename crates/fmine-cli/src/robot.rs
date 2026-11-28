@@ -658,13 +658,14 @@ mod tests {
         }
 
         // 3. Validate every compiled verb in VERB_CATALOG against verbs schema (and reject unknown).
-        assert_eq!(VERB_CATALOG.len(), 102);
+        assert_eq!(VERB_CATALOG.len(), 103);
         for path in [
             "drill composite",
             "drill qaqc",
             "drill blanks",
             "drill duplicates",
             "drill monitor",
+            "drill censored",
         ] {
             assert!(VERB_CATALOG.iter().any(|verb| verb.path == path
                 && verb.subsystem == "Corebox"

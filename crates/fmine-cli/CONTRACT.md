@@ -55,6 +55,15 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
   does not verify chronology, certificate authenticity or policy preregistration, and no durable
   investigation or monitor state is written. Native tests cover prefix replay and known alarm steps.
 
+- DESIGN (BD-168). `drill_censored` exposes `drill censored` over the existing lognormal MLE and
+  ROS engines. Positive measured values and individual below-detection limits retain raw tokens,
+  source rows and a common declared population/lab/analyte/method/unit/basis. Both methods report
+  their outcome independently; partial comparisons retain the refused method and warn, while two
+  failed fits refuse the command. The report includes untruncated fitted mass above one and keeps
+  descriptive quantiles separate from absent estimation intervals. Lost positive model quantities
+  refuse; tiny representable ROS dispersion remains positive. Native tests use independent likelihood
+  and ROS references, exact uncensored moments, partial failure and numerical boundary controls.
+
 - DESIGN (BD-167, BD-282). `drill_qaqc` exposes `drill qaqc --input <batch.toml>` over the numerical
   CRM engine. A bounded `fmine.crm-batch.v1` declaration supplies CRM, lab, analyte, method, unit,
   certificate-source label, evidence lane, omitted uncertainty, certified mean, all three named SD
@@ -374,7 +383,7 @@ The `fmine` CLI binary and command-execution library (`WP-06`, `BD-111`–`BD-11
     ratio. The held-out error uses the reported comparable actual. Selection, original scope and price
     normalization remain the submitter's declarations. The ratio has no calibration claim.
 - **LOC budget:** 54,000 planned / 72,000 ceiling
-- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "doctor", "drill", "drill_qaqc", "drill_quality", "drill_monitor", "triage", "geo", "investment", "pit", "plan_certificate", "recon", "repair", "robot", "verb_catalog", "schedule", "lane_cutoff", "route_blend", "plant", "worksheet_input", "html", "decision", "capital", "capital_return", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "spatial", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables", "screen_target", "waterfall"]`
+- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "compare", "cost", "doctor", "drill", "drill_qaqc", "drill_quality", "drill_monitor", "drill_censored", "triage", "geo", "investment", "pit", "plan_certificate", "recon", "repair", "robot", "verb_catalog", "schedule", "lane_cutoff", "route_blend", "plant", "worksheet_input", "html", "decision", "capital", "capital_return", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_clusters", "track_record_data", "track_record_price", "recovery", "lint", "lint_publicness", "lint_guidance", "lint_html", "lint_reserve", "mirror", "forecast", "spatial", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables", "screen_target", "waterfall"]`
 
 - DESIGN (BD-225, plan §§17.8/22.3/23.4): `decide production --manifest <comparison.toml>`
   compares two to sixteen complete source-bound production/valuation alternatives plus one common

@@ -7,7 +7,9 @@ use fmine_core::det;
 use fmine_drill::records::AssayValue;
 
 use crate::error::QaqcError;
-use crate::stats::{inverse_mills_lower, ln_normal_cdf, mean_and_sample_sd, sorted_quantile};
+use crate::stats::{
+    inverse_mills_lower, ln_normal_cdf, mean_and_sample_sd, normal_cdf, normal_pdf, sorted_quantile,
+};
 
 /// Attempted constant substitution of below-detection results, refused by guard `G-CENS`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -381,16 +383,21 @@ fn build_mle_fit(
     let p90 = det::exp(mu_log + det::norm_ppf(0.90) * sigma_log);
     if !(mu_log.is_finite()
         && sigma_log.is_finite()
+        && sigma_log > 0.0
         && median.is_finite()
+        && median > 0.0
         && arithmetic_mean.is_finite()
+        && arithmetic_mean > 0.0
         && arithmetic_sd.is_finite()
+        && arithmetic_sd > 0.0
         && p90.is_finite()
+        && p90 > 0.0
         && log_likelihood.is_finite())
     {
         return Err(QaqcError::NumericalFailure {
             context: "censored.mle".to_string(),
             detail: format!(
-                "back-transformed lognormal moments overflowed (mu_log={mu_log}, sigma_log={sigma_log})"
+                "back-transformed positive lognormal moments overflowed or underflowed (mu_log={mu_log}, sigma_log={sigma_log})"
             ),
         });
     }
@@ -409,6 +416,43 @@ fn build_mle_fit(
         iterations,
         high_censoring_warning: censored_fraction > 0.80,
     })
+}
+
+/// Refine Acklam's initial approximation for the plotting-position regression. The core inverse
+/// has approximately 1e-9 quantile error; Newton correction against the existing CDF prevents
+/// that error from propagating into fitted slopes. Solve the lower tail to avoid upper-tail
+/// subtraction loss. This is local to ROS and leaves the pinned core math implementation intact.
+fn ros_normal_score(p: f64) -> Result<f64, QaqcError> {
+    if !(p > 0.0 && p < 1.0) {
+        return Err(QaqcError::invalid(
+            "censored.ros.probability",
+            "plotting position must lie in (0,1)",
+        ));
+    }
+    let lower_tail = if p <= 0.5 { p } else { 1.0 - p };
+    let mut z = det::norm_ppf(lower_tail);
+    for _ in 0..3 {
+        let density = normal_pdf(z);
+        let probability = normal_cdf(z);
+        if !z.is_finite() || !density.is_finite() || density <= 0.0 || !probability.is_finite() {
+            return Err(QaqcError::NumericalFailure {
+                context: "censored.ros.normal_score".into(),
+                detail: "normal quantile refinement exceeds finite arithmetic".into(),
+            });
+        }
+        let next = z - (probability - lower_tail) / density;
+        if next == z {
+            break;
+        }
+        z = next;
+    }
+    if !z.is_finite() {
+        return Err(QaqcError::NumericalFailure {
+            context: "censored.ros.normal_score".into(),
+            detail: "refined normal quantile is nonfinite".into(),
+        });
+    }
+    Ok(if p <= 0.5 { z } else { -z })
 }
 
 /// Fits robust multi-detection-limit lognormal Regression on Order Statistics (ROS; Helsel 2012,
@@ -441,7 +485,10 @@ pub fn fit_censored_ros(dataset: &CensoredDataset) -> Result<RosFit, QaqcError> 
     };
 
     // Fit OLS regression of ln(x_u) on normal scores z_i = Phi^-1(p_i).
-    let zs: Vec<f64> = uncens_probs.iter().map(|&p| det::norm_ppf(p)).collect();
+    let zs: Vec<f64> = uncens_probs
+        .iter()
+        .map(|&p| ros_normal_score(p))
+        .collect::<Result<_, _>>()?;
     let ys: Vec<f64> = uncensored.iter().map(|&x| det::ln(x)).collect();
     let z_bar = zs.iter().sum::<f64>() / (n_u as f64);
     let y_bar = ys.iter().sum::<f64>() / (n_u as f64);
@@ -480,12 +527,14 @@ pub fn fit_censored_ros(dataset: &CensoredDataset) -> Result<RosFit, QaqcError> 
     let mut combined = uncensored;
     let mut modeled_above_dl_count = 0usize;
     for (p, dl) in cens_probs_with_dl {
-        let z = det::norm_ppf(p);
+        let z = ros_normal_score(p)?;
         let modeled = det::exp(mu_log + sigma_log * z);
-        if !modeled.is_finite() {
+        if !modeled.is_finite() || modeled <= 0.0 {
             return Err(QaqcError::NumericalFailure {
                 context: "censored.ros".to_string(),
-                detail: format!("modeled censored order statistic overflowed at p={p}"),
+                detail: format!(
+                    "positive modeled censored order statistic overflowed or underflowed at p={p}"
+                ),
             });
         }
         if modeled > dl {
@@ -495,24 +544,43 @@ pub fn fit_censored_ros(dataset: &CensoredDataset) -> Result<RosFit, QaqcError> 
     }
     combined.sort_by(f64::total_cmp);
 
-    let (mean, sd) = mean_and_sample_sd(&combined).ok_or_else(|| QaqcError::NumericalFailure {
-        context: "censored.ros".to_string(),
-        detail: "failed to compute ROS summary moments".to_string(),
-    })?;
+    // Every value is strictly positive. Scale before squaring so a representable tiny SD does
+    // not disappear merely because its variance is below the binary64 range.
+    let scale = combined
+        .last()
+        .copied()
+        .ok_or_else(|| QaqcError::NumericalFailure {
+            context: "censored.ros".to_string(),
+            detail: "combined ROS sample is empty".to_string(),
+        })?;
+    let normalized: Vec<f64> = combined.iter().map(|x| x / scale).collect();
+    let (normalized_mean, normalized_sd) =
+        mean_and_sample_sd(&normalized).ok_or_else(|| QaqcError::NumericalFailure {
+            context: "censored.ros".to_string(),
+            detail: "failed to compute ROS summary moments".to_string(),
+        })?;
+    let mean = scale * normalized_mean;
+    let sd = scale * normalized_sd;
     let p25 = sorted_quantile(&combined, 0.25);
     let median = sorted_quantile(&combined, 0.50);
     let p75 = sorted_quantile(&combined, 0.75);
     let p90 = sorted_quantile(&combined, 0.90);
     if !(mean.is_finite()
+        && mean > 0.0
         && sd.is_finite()
+        && sd > 0.0
         && p25.is_finite()
+        && p25 > 0.0
         && median.is_finite()
+        && median > 0.0
         && p75.is_finite()
-        && p90.is_finite())
+        && p75 > 0.0
+        && p90.is_finite()
+        && p90 > 0.0)
     {
         return Err(QaqcError::NumericalFailure {
             context: "censored.ros".to_string(),
-            detail: "ROS summary moments overflowed to non-finite values".to_string(),
+            detail: "positive ROS summary moments overflowed or underflowed".to_string(),
         });
     }
     let censored_fraction = (n_c as f64) / (n_total as f64);

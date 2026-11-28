@@ -370,6 +370,31 @@ combined false-alarm guarantee. Source chronology, certificate authenticity and 
 are not verified. These diagnostic commands leave their Claims Assumed, Internal and uncalibrated;
 they write no assay release, InvestigationCase, custody or authority records.
 
+## Fit left-censored assay populations without DL substitution
+
+```bash
+fmine drill censored --input tests/drill/censored_assays.toml --format markdown
+```
+
+DESIGN (BD-168): the existing left-censored lognormal maximum-likelihood and Regression on Order
+Statistics (ROS) engines now accept a source-bound assay worksheet. The declaration names one
+population, analyte, method, lab, mass-fraction unit and dry or wet basis. Positive measured values
+and individual `<DL` limits remain in their original rows; neither method replaces raw assays.
+At least two uncensored positive observations are required, and right-censored inputs are refused.
+
+The report compares both methods with their actual observation counts, fitted summaries and
+diagnostics. A failed method retains its typed refusal beside the successful method; if both fail,
+the command refuses. ROS reports modeled values exceeding their own detection limits, and positive
+model quantities that would underflow to zero are refused. Tiny but representable dispersion is
+preserved. [The synthetic fixture](tests/drill/censored_assays.toml) is checked against an independent
+normal log-likelihood optimization and independently calculated ROS plotting positions.
+
+The assumed lognormal distribution is positive and untruncated, so it can place probability above
+physical mass fraction one; that probability is reported explicitly for each fit. Distribution
+quantiles are descriptive model spread, not estimation confidence intervals. These are Assumed,
+Internal, uncalibrated diagnostics, with source hash and row identity, not a resource estimate or
+permission to release assay results.
+
 ## Check the remainder grade of a headline drill interval
 
 ```bash

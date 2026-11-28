@@ -609,6 +609,12 @@ mutates_authority = false
 description = "Replay a declared CRM stream through the sequential e-process and pattern monitors, retaining each prefix, source identity and integrity alarm"
 
 [[verb]]
+path = "drill censored"
+subsystem = "Corebox"
+mutates_authority = false
+description = "Compare lognormal MLE and ROS fits of source-bound left-censored assays without replacing raw observations, retaining method failures and model limitations"
+
+[[verb]]
 path = "metrics roce"
 subsystem = "Bullion"
 mutates_authority = false

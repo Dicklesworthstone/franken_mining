@@ -1,0 +1,27 @@
+# SYNTHETIC multi-detection-limit dataset; original tokens are retained.
+schema = "fmine.censored-assays.v1"
+population = "SYNTHETIC-HOMOGENEOUS-POPULATION"
+analyte = "Fe"
+method = "fusion_xrf"
+lab = "SYNTHETIC-LAB"
+unit = "mass_fraction"
+basis = "dry"
+evidence_lane = "synthetic"
+source_description = "Five synthetic assays with two distinct reporting limits."
+omitted_uncertainty = "Sampling bias, spatial dependence, calibration uncertainty and model misspecification."
+
+[[observation]]
+sample_id = "SYN-01"
+value = "0.125"
+[[observation]]
+sample_id = "SYN-02"
+value = "<0.125"
+[[observation]]
+sample_id = "SYN-03"
+value = "0.25"
+[[observation]]
+sample_id = "SYN-04"
+value = "<0.25"
+[[observation]]
+sample_id = "SYN-05"
+value = "0.5"
