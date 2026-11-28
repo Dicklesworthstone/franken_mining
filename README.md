@@ -3,7 +3,7 @@
 <div align="center">
 
 [![Status](https://img.shields.io/badge/status-working%20CLI%20%C2%B7%20M0%20open-orange)](#honest-status)
-[![Runtime pin](https://img.shields.io/badge/runtime%20pin-asupersync%200.5.0-6f42c1)](#oracles-and-pins)
+[![Runtime pin](https://img.shields.io/badge/runtime%20pin-asupersync%200.6.2-6f42c1)](#oracles-and-pins)
 [![Core](https://img.shields.io/badge/core-Rust%202024-b7410e)](#architecture)
 [![Plan](https://img.shields.io/badge/plan-design%20and%20milestones-2ea44f)](COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md)
 [![License](https://img.shields.io/badge/license-MIT%20%2B%20AI%20rider-yellow)](LICENSE)
@@ -6286,7 +6286,7 @@ NDJSON envelope with documented exit codes. Agents get certified numbers or type
 
 | Reference | Pin | Role |
 |---|---|---|
-| asupersync | `=0.5.0` | Sole async runtime (known defects and mitigations: plan §31.4) |
+| asupersync | `=0.6.2` | Sole async runtime (known defects and mitigations: plan §31.4) |
 | Rust toolchain | `nightly-2026-08-31` | Suite-wide pin |
 | frankensim | commit per lifted file (`registries/lifts.toml`) | Geometry, sparse solvers, exact predicates |
 | franken_accounting | revision in `franken-stack.lock` | Book of record, reached as a subprocess |
