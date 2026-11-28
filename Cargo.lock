@@ -1085,9 +1085,11 @@ dependencies = [
 name = "fmine-verify"
 version = "0.1.0"
 dependencies = [
+ "fmine-array",
  "fmine-calib",
  "fmine-cli",
  "fmine-core",
+ "fmine-drill",
  "fmine-evidence",
  "fmine-flow",
  "fmine-gen",
@@ -1095,6 +1097,7 @@ dependencies = [
  "fmine-ledger",
  "fmine-object",
  "fmine-optimize",
+ "fmine-projection",
  "fmine-recon",
  "fmine-sync",
  "fmine-units",

@@ -19,11 +19,14 @@ fmine-object = { path = "../fmine-object" }
 fmine-sync = { path = "../fmine-sync" }
 
 [dev-dependencies]
+fmine-array = { path = "../fmine-array" }
 fmine-calib = { path = "../fmine-calib" }
 fmine-cli = { path = "../fmine-cli" }
+fmine-drill = { path = "../fmine-drill" }
 fmine-flow = { path = "../fmine-flow" }
 fmine-gen = { path = "../fmine-gen" }
 fmine-lab = { path = "../fmine-lab" }
 fmine-optimize = { path = "../fmine-optimize" }
+fmine-projection = { path = "../fmine-projection" }
 fmine-recon = { path = "../fmine-recon" }
 fmine-units = { path = "../fmine-units" }
