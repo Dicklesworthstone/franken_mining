@@ -73,10 +73,17 @@ impl GrossErrorPolicy {
                 format!("must lie in (0, 1), got {}", self.measurement_alpha),
             ));
         }
-        if !(self.target_power.is_finite() && self.target_power > 0.0 && self.target_power < 1.0) {
+        if !(self.target_power.is_finite()
+            && self.target_power > self.global_alpha
+            && self.target_power > self.measurement_alpha
+            && self.target_power < 1.0)
+        {
             return Err(ReconError::invalid(
                 "gross_error.target_power",
-                format!("must lie in (0, 1), got {}", self.target_power),
+                format!(
+                    "must strictly exceed global_alpha ({}) and measurement_alpha ({}) and lie below 1.0, got {}",
+                    self.global_alpha, self.measurement_alpha, self.target_power
+                ),
             ));
         }
         if self.periods_per_quarter == 0 {
@@ -219,11 +226,20 @@ fn assemble_balance_covariance(
 ) -> Result<(Vec<f64>, Vec<f64>), ReconError> {
     let n = recon.variables.len();
     let m = recon.degrees_of_freedom;
-    if m == 0 || n == 0 || recon.constraints.len() != m * n || recon.prior_covariance.len() != n * n
+    if m == 0
+        || n == 0
+        || recon.constraints.len() != m * n
+        || recon.prior_covariance.len() != n * n
+        || recon.observed.len() != n
+        || recon.adjustments.len() != n
+        || recon.adjustment_covariance.len() != n * n
+        || recon.normalized_adjustments.len() != n
+        || !recon.chi_square.is_finite()
+        || recon.chi_square < 0.0
     {
         return Err(ReconError::InsufficientRedundancy {
             context: "gross_error".to_string(),
-            detail: "reconciliation result has invalid dimensions or zero degrees of freedom"
+            detail: "reconciliation result has invalid dimensions, non-finite chi_square, or zero degrees of freedom"
                 .to_string(),
         });
     }

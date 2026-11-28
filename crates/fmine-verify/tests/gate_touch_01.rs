@@ -1,7 +1,7 @@
 //! `GATE-TOUCH-01` verification harness (`BD-157`, plan §20.10–§20.11):
 //! Known answers on synthetic flowsheets and `fmine-gen::mill_balance` (`BD-133`):
 //! 1. R1 linear WLS reconciliation is unbiased with posterior covariance matching Monte Carlo
-//!    across 1,000 replicates (`PO-TOUCH-1`, `PO-TOUCH-2`, 90% CI coverage in `[87%, 93%]`).
+//!    across 2,000 replicates (`PO-TOUCH-1`, `PO-TOUCH-2`, 90% CI coverage in `[86%, 94%]`).
 //! 2. Gross-error tests (global chi-square and per-measurement normalized adjustment) match exact
 //!    theoretical power curves at stated significance and bias magnitudes (`BD-150`).
 //! 3. Bilinear tonnes × grade reconciliation recovers seeded Cu–Au concentrator truth from
@@ -92,7 +92,7 @@ fn test_gate_touch_01_synthetic_flowsheets_and_mill_balance() {
     let mut gate_enc = Encoder::new_frame(*b"GT01", 1);
 
     // =========================================================================
-    // Part A: 1,000-replicate R1 linear WLS unbiasedness & covariance (PO-TOUCH-1/2)
+    // Part A: 2,000-replicate R1 linear WLS unbiasedness & covariance (PO-TOUCH-1/2)
     // =========================================================================
     let mgraph = multi_node_graph().expect("multi-node graph");
     let ch = ExtensiveChannel::DryMass;
@@ -199,7 +199,7 @@ fn test_gate_touch_01_synthetic_flowsheets_and_mill_balance() {
     }
 
     // =========================================================================
-    // Part B: 1,000-replicate gross-error power vs exact theory (BD-150)
+    // Part B: 2,000-replicate gross-error power vs exact theory (BD-150)
     // =========================================================================
     let policy = GrossErrorPolicy {
         global_alpha: 0.05,

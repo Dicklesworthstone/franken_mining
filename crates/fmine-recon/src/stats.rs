@@ -132,8 +132,14 @@ fn gamma_q_cf(a: f64, x: f64) -> f64 {
 
 /// Upper-tail survival probability `P(ChiSq_df >= x) = Q(df / 2, x / 2)`.
 pub(crate) fn chi_square_upper_tail(x: f64, df: usize) -> f64 {
+    if !x.is_finite() {
+        return if x.is_sign_positive() { 0.0 } else { 1.0 };
+    }
     if x <= 0.0 {
         return 1.0;
+    }
+    if df == 0 {
+        return 0.0;
     }
     let a = 0.5 * (df as f64);
     let z = 0.5 * x;
@@ -146,11 +152,14 @@ pub(crate) fn chi_square_upper_tail(x: f64, df: usize) -> f64 {
 
 /// Upper-tail critical value `c` solving `P(ChiSq_df >= c) = alpha` for `alpha in (0, 1)`.
 pub(crate) fn chi_square_critical_upper(alpha: f64, df: usize) -> f64 {
+    if df == 0 {
+        return 0.0;
+    }
     let k = df as f64;
     let z = det::norm_ppf(1.0 - alpha);
     // Wilson-Hilferty cube-root approximation gives a tight starting scale.
     let wh_inner = 1.0 - 2.0 / (9.0 * k) + z * det::sqrt(2.0 / (9.0 * k));
-    let approx = if wh_inner > 0.0 {
+    let approx = if wh_inner.is_finite() && wh_inner > 0.0 {
         k * wh_inner * wh_inner * wh_inner
     } else {
         k
@@ -173,17 +182,40 @@ pub(crate) fn chi_square_critical_upper(alpha: f64, df: usize) -> f64 {
 
 /// Exact non-central chi-square upper-tail probability `P(ChiSq(df, lambda) >= x)`.
 ///
-/// Evaluates the Poisson mixture `sum_{k>=0} Pois(k; lambda/2) * Q((df + 2k)/2, x/2)` starting
-/// outward from the Poisson mode `k0 = floor(lambda / 2)` so arbitrary `lambda >= 0` never
-/// underflows `exp(-lambda / 2)`.
+/// For moderate non-centrality (`lambda <= 1e5`), evaluates the exact Poisson mixture
+/// `sum_{k>=0} Pois(k; lambda/2) * Q((df + 2k)/2, x/2)` starting outward from the Poisson mode
+/// `k0 = floor(lambda / 2)` (so `10,000` terms cover `> 44 sigma` on each side without overflow).
+/// For very large non-centrality (`lambda > 1e5`), uses Sankaran's (1963) three-moment power
+/// normal transformation, preventing `usize` overflow and Poisson tail truncation.
 pub(crate) fn noncentral_chi_square_upper_tail(x: f64, df: usize, lambda: f64) -> f64 {
+    if !x.is_finite() {
+        return if x.is_sign_positive() { 0.0 } else { 1.0 };
+    }
     if x <= 0.0 {
         return 1.0;
+    }
+    if !lambda.is_finite() {
+        return if lambda.is_sign_positive() { 1.0 } else { 0.0 };
     }
     if lambda <= 0.0 {
         return chi_square_upper_tail(x, df);
     }
     let half_lam = 0.5 * lambda;
+    if half_lam > 5.0e4 {
+        // Sankaran (1963) 3-moment normal approximation for large non-centrality.
+        let k = df as f64;
+        let mean = k + lambda;
+        let h = 1.0
+            - (2.0 / 3.0) * (k + lambda) * (k + 3.0 * lambda)
+                / ((k + 2.0 * lambda) * (k + 2.0 * lambda));
+        let p = (k + 2.0 * lambda) / (mean * mean);
+        let m = (h - 1.0) * (1.0 - 3.0 * h);
+        let mu_s = 1.0 + h * p * (h - 1.0 - 0.5 * (2.0 - h) * m * p);
+        let sd_s = h * det::sqrt(2.0 * p) * (1.0 + 0.5 * m * p);
+        let ratio_h = det::exp(h * det::ln(x / mean));
+        let z = (ratio_h - mu_s) / sd_s;
+        return (1.0 - normal_cdf(z)).clamp(0.0, 1.0);
+    }
     let k0 = half_lam.floor() as usize;
     let k0_f = k0 as f64;
     let log_w0 = -half_lam + k0_f * det::ln(half_lam) - ln_gamma(k0_f + 1.0);

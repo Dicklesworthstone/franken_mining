@@ -4,22 +4,44 @@
 
 use std::collections::BTreeMap;
 
+use fmine_claim::refclass::RefClassId;
+use fmine_core::cert::{DeterminismClass, InputDigest};
 use fmine_core::det;
+use fmine_core::hash::sha256;
 use fmine_core::rand::{PhiloxStream, RngKey};
 use fmine_evidence::RefusalCode;
 use fmine_flow::graph::{FlowGraph, FlowNode, FlowStream, NodeClass, StockpileMixingModel};
+use fmine_recon::bias::{
+    BiasObservation, BiasTargetKind, FactorMultiplierAttempt, HierarchicalBiasRequest,
+    HierarchicalGroupPrior, MiningSourceKind, NodeBiasSpec, PosteriorSampleRequest,
+    StandaloneNodePrior, fit_hierarchical_bias_posteriors, refuse_factor_multiplier_application,
+    sample_hierarchical_posterior,
+};
 use fmine_recon::bilinear::{
     BilinearFlowRequest, BilinearObsCorrelation, BilinearObsRef, BilinearStreamObservation,
     GradeValue, ObservedGrade, ObservedScalar, reconcile_bilinear_flow,
+};
+use fmine_recon::certificate::{
+    AttestationStatus, BalanceCertificateSummary, CertifiedFactorInterval,
+    CertifiedQuantityInterval, IdentifiabilityCertificateSummary, NodeBalanceRecord,
+    ParityDifferenceStatus, ParityExplanation, PosteriorCertificateSummary,
+    ReconciliationCertificate, ReconciliationCertificateRequest, RefusedPairVoiRecord,
+    RegisteredForecastScore,
 };
 use fmine_recon::gross_error::{
     BiasVectorSpec, CommitDisposition, GrossErrorPolicy, MultiplicityCorrection,
     analyze_bias_power, enforce_commit_gate, evaluate_gross_errors,
 };
+use fmine_recon::identifiability::{
+    CandidateMeasurement, CandidateMeasurementKind, IdentifiabilityRequest, MeasurementVoiRequest,
+    analyze_hierarchical_identifiability, analyze_identifiability, evaluate_measurement_voi,
+    require_full_identifiability, require_parameter_identifiable,
+};
 use fmine_recon::linear::{
     BiasIdentifiabilityRequest, BiasLinearObservation, BiasPriorSpec, CovarianceOffDiagonal,
     DirectGradeReconciliationAttempt, ExtensiveChannel, LinearFlowRequest, MeasuredVariable,
-    PartialFlowRequest, VariableKey, analyze_bias_identifiability, reconcile_flow_graph,
+    NamedLinearConstraint, NamedLinearRequest, PartialFlowRequest, VariableKey,
+    analyze_bias_identifiability, reconcile_flow_graph, reconcile_named_system,
     reconcile_partial_flow_graph, refuse_direct_grade_reconciliation,
     require_identifiable_attribution,
 };
@@ -1119,5 +1141,635 @@ fn test_recon_fresh_eyes_hardening_trace_scale_and_physicality() {
             relative_closure_tolerance: 1e-9,
         })
         .is_err()
+    );
+}
+
+#[test]
+fn test_bd152_hierarchical_bias_pooling_porgera_sources_and_safeguards() {
+    // 1. Exact analytical partial-pooling oracle:
+    //    mu_g ~ N(0, sigma_mu^2), b_1, b_2 | mu_g ~ N(mu_g, tau^2)
+    //    Observe y_1 = b_1 + eps_1 = -0.08, eps_1 ~ N(0, sigma_y^2), NO observation on b_2.
+    //    Exact marginal posterior of b_2 given y_1:
+    //      Cov(b_2, y_1) = sigma_mu^2, Var(y_1) = sigma_mu^2 + tau^2 + sigma_y^2
+    //      E[b_2 | y_1] = (sigma_mu^2 / Var(y_1)) * y_1
+    //      Var(b_2 | y_1) = (sigma_mu^2 + tau^2) - sigma_mu^4 / Var(y_1).
+    let sigma_mu = 0.05_f64;
+    let tau = 0.03_f64;
+    let sigma_y = 0.01_f64;
+    let y1 = -0.08_f64;
+    let rc_id = RefClassId::parse("REFCLASS-AU-OP-RECON").expect("valid refclass id");
+
+    let req = HierarchicalBiasRequest {
+        evidence_cut_id: "cut-2026Q1-001".to_string(),
+        surprise_alarm_active: false,
+        confidence_level: 0.90,
+        groups: vec![HierarchicalGroupPrior {
+            group_id: "op_domains".to_string(),
+            source: MiningSourceKind::OpenPit,
+            target: BiasTargetKind::InSituMetal,
+            hyper_mean: 0.0,
+            hyper_sd: sigma_mu,
+            between_node_sd: tau,
+            refclass_id: Some(rc_id.clone()),
+        }],
+        nodes: vec![
+            NodeBiasSpec {
+                node_id: "domain_12".to_string(),
+                source: MiningSourceKind::OpenPit,
+                target: BiasTargetKind::InSituMetal,
+                group_id: Some("op_domains".to_string()),
+                standalone_prior: None,
+                refclass_id: None,
+            },
+            NodeBiasSpec {
+                node_id: "domain_13".to_string(),
+                source: MiningSourceKind::OpenPit,
+                target: BiasTargetKind::InSituMetal,
+                group_id: Some("op_domains".to_string()),
+                standalone_prior: None,
+                refclass_id: None,
+            },
+        ],
+        observations: vec![BiasObservation {
+            label: "domain_12_q1".to_string(),
+            period_index: 0,
+            terms: vec![("domain_12".to_string(), 1.0)],
+            observed: y1,
+            obs_sd: sigma_y,
+        }],
+    };
+    let res = fit_hierarchical_bias_posteriors(&req).expect("hierarchical fit");
+    let var_y1 = sigma_mu * sigma_mu + tau * tau + sigma_y * sigma_y;
+    let expected_b2_mean = (sigma_mu * sigma_mu / var_y1) * y1;
+    let expected_b2_var = (sigma_mu * sigma_mu + tau * tau) - (sigma_mu.powi(4) / var_y1);
+    let expected_b1_mean = ((sigma_mu * sigma_mu + tau * tau) / var_y1) * y1;
+
+    let d12 = res.node_posterior("domain_12").expect("domain_12");
+    let d13 = res.node_posterior("domain_13").expect("domain_13");
+    assert!((d12.posterior_mean - expected_b1_mean).abs() < 1e-12);
+    assert!((d13.posterior_mean - expected_b2_mean).abs() < 1e-12);
+    assert!((d13.posterior_sd - det::sqrt(expected_b2_var)).abs() < 1e-12);
+    assert_eq!(d12.direct_observation_count, 1);
+    assert_eq!(d13.direct_observation_count, 0);
+    assert!(!res.update_event.requires_investigation_case);
+    assert_eq!(res.update_event.refclass_ids, vec![rc_id]);
+
+    // 2. Opposite-sign mining sources (Porgera E298: UG +36%, OP -8%) separated by source group,
+    //    plus surprise-monitor safeguard routing through InvestigationCase (§20.5).
+    let porgera = fit_hierarchical_bias_posteriors(&HierarchicalBiasRequest {
+        evidence_cut_id: "cut-porgera-2011".to_string(),
+        surprise_alarm_active: true,
+        confidence_level: 0.95,
+        groups: vec![
+            HierarchicalGroupPrior {
+                group_id: "open_pit".to_string(),
+                source: MiningSourceKind::OpenPit,
+                target: BiasTargetKind::InSituMetal,
+                hyper_mean: 0.0,
+                hyper_sd: 0.25,
+                between_node_sd: 0.05,
+                refclass_id: None,
+            },
+            HierarchicalGroupPrior {
+                group_id: "underground".to_string(),
+                source: MiningSourceKind::Underground,
+                target: BiasTargetKind::InSituMetal,
+                hyper_mean: 0.0,
+                hyper_sd: 0.25,
+                between_node_sd: 0.05,
+                refclass_id: None,
+            },
+        ],
+        nodes: vec![
+            NodeBiasSpec {
+                node_id: "op_main".to_string(),
+                source: MiningSourceKind::OpenPit,
+                target: BiasTargetKind::InSituMetal,
+                group_id: Some("open_pit".to_string()),
+                standalone_prior: None,
+                refclass_id: None,
+            },
+            NodeBiasSpec {
+                node_id: "ug_zone7".to_string(),
+                source: MiningSourceKind::Underground,
+                target: BiasTargetKind::InSituMetal,
+                group_id: Some("underground".to_string()),
+                standalone_prior: None,
+                refclass_id: None,
+            },
+        ],
+        observations: vec![
+            BiasObservation {
+                label: "op_2007_2011".to_string(),
+                period_index: 0,
+                terms: vec![("op_main".to_string(), 1.0)],
+                observed: -0.08,
+                obs_sd: 0.015,
+            },
+            BiasObservation {
+                label: "ug_2007_2011".to_string(),
+                period_index: 0,
+                terms: vec![("ug_zone7".to_string(), 1.0)],
+                observed: 0.36,
+                obs_sd: 0.025,
+            },
+        ],
+    })
+    .expect("porgera fit");
+    assert!(
+        porgera
+            .node_posterior("op_main")
+            .expect("op")
+            .posterior_mean
+            < -0.05
+    );
+    assert!(
+        porgera
+            .node_posterior("ug_zone7")
+            .expect("ug")
+            .posterior_mean
+            > 0.30
+    );
+    assert!(porgera.update_event.requires_investigation_case);
+
+    // 3. Guard G-TOUCH-5 refuses factor multiplier application.
+    let mult_err = refuse_factor_multiplier_application(&FactorMultiplierAttempt {
+        factor_name: "F2".to_string(),
+        multiplier: 0.93,
+        target_context: "next_month_gc_forecast".to_string(),
+    })
+    .expect_err("G-TOUCH-5 must refuse multiplier");
+    assert_eq!(
+        mult_err.to_refusal().code,
+        RefusalCode::OutsidePhysicalDomain109.as_str()
+    );
+
+    // 4. Posterior sampler recovers exact joint mean & covariance over 4,000 draws.
+    let draws = sample_hierarchical_posterior(
+        &res,
+        &PosteriorSampleRequest {
+            seed: RngKey {
+                seed_root: 152_2026,
+                partition: 1,
+                domain: 1,
+                var_group: 1,
+                realization: 0,
+                brick: 0,
+            },
+            draw_count: 4_000,
+        },
+    )
+    .expect("sample draws");
+    let d13_draws = draws.draws_for("domain_13").expect("domain_13 draws");
+    let mean_emp = d13_draws.iter().sum::<f64>() / 4_000.0;
+    let var_emp = d13_draws
+        .iter()
+        .map(|&v| (v - mean_emp) * (v - mean_emp))
+        .sum::<f64>()
+        / 3_999.0;
+    assert!((mean_emp - d13.posterior_mean).abs() < 3.5 * d13.posterior_sd / det::sqrt(4_000.0));
+    assert!((det::sqrt(var_emp) - d13.posterior_sd).abs() / d13.posterior_sd < 0.06);
+}
+
+#[test]
+fn test_bd153_observation_rank_nullspace_and_measurement_voi() {
+    // 1. GB-25 confounded system: H = [[1, -1]], rank 1 < 2, nullspace dim 1.
+    let rep = analyze_identifiability(&IdentifiabilityRequest {
+        parameter_names: vec!["b_gc".to_string(), "b_mill".to_string()],
+        prior_means: vec![0.0, 0.0],
+        prior_covariance: vec![0.0025, 0.0, 0.0, 0.0025], // sd = 0.05 each
+        observation_design: vec![1.0, -1.0],
+        observed: vec![-0.096],
+        obs_sds: vec![0.015],
+        confidence_level: 0.95,
+    })
+    .expect("GB-25 identifiability");
+    assert_eq!(rep.observation_rank, 1);
+    assert_eq!(rep.nullspace_dimension, 1);
+    assert!(!rep.is_fully_identifiable);
+    assert_eq!(rep.confounded_pairs.len(), 1);
+    assert!(rep.confounded_pairs[0].rank_deficient_split);
+    assert!((rep.confounded_pairs[0].correlation - 0.917_431).abs() < 0.005);
+    assert_eq!(rep.identifiable_contrasts.len(), 1);
+    assert_eq!(rep.nullspace_directions.len(), 1);
+    // Contrast c = [1/sqrt(2), -1/sqrt(2)] -> c^T b = (b_gc - b_mill) / sqrt(2).
+    let inv_s2 = 1.0 / det::sqrt(2.0);
+    assert!((rep.identifiable_contrasts[0].weights[0].abs() - inv_s2).abs() < 1e-12);
+    assert!((rep.identifiable_contrasts[0].weights[1].abs() - inv_s2).abs() < 1e-12);
+    assert!(
+        (rep.identifiable_contrasts[0].weights[0] * rep.identifiable_contrasts[0].weights[1]) < 0.0
+    );
+    // Nullspace direction v = [1/sqrt(2), 1/sqrt(2)] satisfies H v = 0.
+    let h_dot_v = rep.nullspace_directions[0][0] - rep.nullspace_directions[0][1];
+    assert!(h_dot_v.abs() < 1e-12);
+
+    let err = require_full_identifiability(&rep).expect_err("must refuse FMINE-REF-104");
+    assert_eq!(
+        err.to_refusal().code,
+        RefusalCode::NonIdentifiableAttribution104.as_str()
+    );
+
+    // 2. Measurement VOI (§20.6): stopped-belt sampler audit resolves identifiability with positive
+    //    net VOI and outranks a redundant repeat F2 ratio.
+    let voi = evaluate_measurement_voi(&MeasurementVoiRequest {
+        baseline: &rep,
+        target_indices: vec![0, 1],
+        unit_error_value_usd: 50_000_000.0, // $50M/yr revenue exposure
+        candidates: vec![
+            CandidateMeasurement {
+                id: "repeat_f2_ratio".to_string(),
+                kind: CandidateMeasurementKind::CheckAssayRoundRobin,
+                description: "Another F2 difference measurement along [1, -1]".to_string(),
+                design_row: vec![1.0, -1.0],
+                obs_sd: 0.015,
+                cost_usd: 10_000.0,
+            },
+            CandidateMeasurement {
+                id: "mill_stopped_belt_audit".to_string(),
+                kind: CandidateMeasurementKind::SamplerAudit,
+                description: "Gy stopped-belt bias test on mill head sampler".to_string(),
+                design_row: vec![0.0, 1.0],
+                obs_sd: 0.02,
+                cost_usd: 35_000.0,
+            },
+        ],
+    })
+    .expect("VOI evaluation");
+    assert_eq!(voi[0].id, "mill_stopped_belt_audit");
+    assert!(voi[0].resolves_identifiability);
+    assert_eq!(voi[0].post_rank, 2);
+    assert!(voi[0].max_abs_corr_after <= 0.80);
+    assert!(voi[0].net_voi_usd > 500_000.0);
+    assert!(!voi[1].resolves_identifiability);
+    assert_eq!(voi[1].post_rank, 1);
+
+    // 3. Partial identifiability + BD-152 -> BD-153 bridge:
+    //    (b0, b1) confounded via b0 - b1, while standalone b2 is directly observed.
+    let hier = fit_hierarchical_bias_posteriors(&HierarchicalBiasRequest {
+        evidence_cut_id: "cut-partial-id".to_string(),
+        surprise_alarm_active: false,
+        confidence_level: 0.90,
+        groups: Vec::new(),
+        nodes: vec![
+            NodeBiasSpec {
+                node_id: "b0".to_string(),
+                source: MiningSourceKind::OpenPit,
+                target: BiasTargetKind::InSituMetal,
+                group_id: None,
+                standalone_prior: Some(StandaloneNodePrior {
+                    mean: 0.0,
+                    std_dev: 0.05,
+                }),
+                refclass_id: None,
+            },
+            NodeBiasSpec {
+                node_id: "b1".to_string(),
+                source: MiningSourceKind::Plant,
+                target: BiasTargetKind::MillSampler,
+                group_id: None,
+                standalone_prior: Some(StandaloneNodePrior {
+                    mean: 0.0,
+                    std_dev: 0.05,
+                }),
+                refclass_id: None,
+            },
+            NodeBiasSpec {
+                node_id: "b2".to_string(),
+                source: MiningSourceKind::Plant,
+                target: BiasTargetKind::Moisture,
+                group_id: None,
+                standalone_prior: Some(StandaloneNodePrior {
+                    mean: 0.0,
+                    std_dev: 0.05,
+                }),
+                refclass_id: None,
+            },
+        ],
+        observations: vec![
+            BiasObservation {
+                label: "f2_diff".to_string(),
+                period_index: 0,
+                terms: vec![("b0".to_string(), 1.0), ("b1".to_string(), -1.0)],
+                observed: -0.06,
+                obs_sd: 0.01,
+            },
+            BiasObservation {
+                label: "moisture_audit".to_string(),
+                period_index: 0,
+                terms: vec![("b2".to_string(), 1.0)],
+                observed: 0.03,
+                obs_sd: 0.008,
+            },
+        ],
+    })
+    .expect("hierarchical partial id fit");
+    let h_id = analyze_hierarchical_identifiability(&hier).expect("hier identifiability");
+    assert_eq!(h_id.observation_rank, 2);
+    assert_eq!(h_id.nullspace_dimension, 1);
+    assert!(!h_id.is_fully_identifiable);
+    assert!(h_id.is_parameter_identifiable("b2"));
+    assert!(!h_id.is_parameter_identifiable("b0"));
+    assert!(!h_id.is_parameter_identifiable("b1"));
+    assert!(require_parameter_identifiable(&h_id, "b2").is_ok());
+    assert_eq!(
+        require_parameter_identifiable(&h_id, "b0")
+            .expect_err("b0 confounded")
+            .to_refusal()
+            .code,
+        RefusalCode::NonIdentifiableAttribution104.as_str()
+    );
+}
+
+#[test]
+fn test_bd156_reconciliation_certificate_roundtrip_and_guards() {
+    let input_bytes = b"period=2026Q1,feed=1000000,mill=960000,sp=25000\n";
+    let base_req = ReconciliationCertificateRequest {
+        period_id: "2026Q1".to_string(),
+        site_id: "synthetic_cu_au_01".to_string(),
+        evidence_cut_id: "cut-2026Q1-final".to_string(),
+        error_model_version: "err-model-v1.2".to_string(),
+        code_revision: "7ccdef62".to_string(),
+        determinism_class: DeterminismClass::DeterministicPerIsa,
+        seed_root: 202_6156,
+        ledger_anchor: None,
+        inputs: vec![InputDigest::new(
+            "measurements",
+            "period_2026Q1.csv",
+            sha256(input_bytes),
+        )],
+        parity_notes: vec![ParityExplanation {
+            metric_id: "F2_Au".to_string(),
+            site_value: 0.904,
+            recomputed_value: 0.9042,
+            status: ParityDifferenceStatus::Explained,
+            rationale: "0.0002 rounding to 3 decimals in site monthly pack".to_string(),
+        }],
+        balance: BalanceCertificateSummary {
+            node_residuals: vec![NodeBalanceRecord {
+                node_label: "node:rom:dry_mass".to_string(),
+                raw_residual: 15_000.0,
+                reconciled_residual: 0.0,
+            }],
+            chi_square: 0.1849,
+            degrees_of_freedom: 1,
+            global_p_value: 0.6672,
+            max_relative_closure_error: 1.2e-16,
+            disposition: CommitDisposition::Admit,
+            flagged_suspects: Vec::new(),
+        },
+        posteriors: PosteriorCertificateSummary {
+            node_quantities: vec![CertifiedQuantityInterval {
+                id: "stream:mill_feed:dry_mass".to_string(),
+                mean: 961_135.76,
+                std_dev: 9_192.0,
+                ci_lower: 946_016.0,
+                ci_upper: 976_255.0,
+            }],
+            f_factors: vec![CertifiedFactorInterval {
+                registry_key: "site:demo:F2_au_metal".to_string(),
+                definition_version: "v2.0".to_string(),
+                mean: 0.9042,
+                ci_lower: 0.879,
+                ci_upper: 0.929,
+            }],
+            bias_terms: vec![CertifiedQuantityInterval {
+                id: "bias:mill_sampler".to_string(),
+                mean: 0.018,
+                std_dev: 0.018,
+                ci_lower: -0.012,
+                ci_upper: 0.048,
+            }],
+            latent_inventories: vec![CertifiedQuantityInterval {
+                id: "inv:rom_pad:dry_mass".to_string(),
+                mean: 27_772.85,
+                std_dev: 13_416.0,
+                ci_lower: 5_705.0,
+                ci_upper: 49_840.0,
+            }],
+        },
+        identifiability: IdentifiabilityCertificateSummary {
+            observation_rank: 1,
+            parameter_count: 2,
+            refused_pairs: vec![RefusedPairVoiRecord {
+                first: "b_gc".to_string(),
+                second: "b_mill".to_string(),
+                correlation: 0.917,
+                determined_contrast: "+0.7071*b_gc -0.7071*b_mill".to_string(),
+                separating_measurement: "mill_stopped_belt_audit".to_string(),
+                net_voi_usd: 745_000.0,
+            }],
+        },
+        forecast_scores: vec![RegisteredForecastScore {
+            forecast_id: "fcst-2026Q1-au".to_string(),
+            forecast_digest_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .to_string(),
+            realized_mean: 33_991.0,
+            interval_covered: true,
+            crps: 412.5,
+        }],
+        attestation: AttestationStatus::ReviewedAgainst {
+            reviewer_role: "Site Metallurgical Accountant".to_string(),
+            against_digest_hex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                .to_string(),
+        },
+        require_admitted_balance: true,
+    };
+
+    let cert_a = ReconciliationCertificate::build(base_req.clone()).expect("build cert A");
+    let cert_b = ReconciliationCertificate::build(base_req.clone()).expect("build cert B");
+    assert_eq!(cert_a.replay_digest_blake3, cert_b.replay_digest_blake3);
+    assert_eq!(cert_a.payload_sha256, cert_b.payload_sha256);
+    assert!(!cert_a.reserve_disclosure_claim());
+    assert!(!cert_a.execution_authorized());
+    assert!(!cert_a.geotechnical_signoff());
+    assert!(!cert_a.regulatory_compliance_claim());
+
+    let bytes = cert_a.to_bytes();
+    let decoded = ReconciliationCertificate::from_bytes(&bytes).expect("round-trip decode");
+    assert_eq!(decoded, cert_a);
+
+    // FMT-CERT-1 conversion round-trip.
+    let fmt_cert = cert_a.to_fmt_cert_1().expect("to FMT-CERT-1");
+    assert_eq!(fmt_cert.output_digest, cert_a.payload_sha256);
+    let fmt_bytes = fmt_cert.to_bytes().expect("FMT-CERT-1 encode");
+    let fmt_decoded =
+        fmine_core::cert::Certificate::from_bytes(&fmt_bytes).expect("FMT-CERT-1 decode");
+    assert_eq!(fmt_decoded, fmt_cert);
+
+    // Single-bit tamper refuses with FMINE-REF-505.
+    let mut bad_bytes = bytes;
+    let mid = bad_bytes.len() / 2;
+    bad_bytes[mid] ^= 0x01;
+    let tamper_err =
+        ReconciliationCertificate::from_bytes(&bad_bytes).expect_err("tamper must refuse");
+    assert_eq!(
+        tamper_err.to_refusal().code,
+        RefusalCode::DigestMismatch505.as_str()
+    );
+
+    // Guard G-TOUCH-4 refuses empty F-factor definition version (FMINE-REF-107).
+    let mut bad_ff = base_req.clone();
+    bad_ff.posteriors.f_factors[0].definition_version = String::new();
+    let g4 = ReconciliationCertificate::build(bad_ff).expect_err("G-TOUCH-4");
+    assert_eq!(
+        g4.to_refusal().code,
+        RefusalCode::UndeclaredUnitBasisOrTz107.as_str()
+    );
+
+    // Guard INV-005 refuses sealing a committed certificate when balance disposition is refused.
+    let mut bad_disp = base_req;
+    bad_disp.balance.disposition = CommitDisposition::RefuseForInvestigation;
+    let g_inv5 = ReconciliationCertificate::build(bad_disp).expect_err("INV-005");
+    assert_eq!(
+        g_inv5.to_refusal().code,
+        RefusalCode::Conservation101.as_str()
+    );
+}
+
+#[test]
+fn test_fresh_eyes_hardening_guards_and_large_lambda_power() {
+    // 1. G-TOUCH-3 must refuse missing InventoryDelta on ANY holds_inventory == true interior node,
+    //    even if its class is PlantUnit (e.g. CIL leach tank) rather than StockpileOrPad!
+    let cil_graph = FlowGraph::build(
+        vec![
+            FlowNode::new("feed_in", "Feed", NodeClass::Transport, false, None).expect("n"),
+            FlowNode::new(
+                "cil_tank",
+                "CIL Circuit",
+                NodeClass::PlantUnit,
+                true, // holds_inventory = true!
+                Some(StockpileMixingModel::WellMixed),
+            )
+            .expect("n"),
+            FlowNode::new("dore_out", "Dore", NodeClass::ProductMarket, false, None).expect("n"),
+        ],
+        vec![
+            FlowStream::new("in_s", "feed_in", "cil_tank", false, ["Au"]).expect("s"),
+            FlowStream::new("out_s", "cil_tank", "dore_out", false, ["Au"]).expect("s"),
+        ],
+    )
+    .expect("cil graph");
+    let ch = ExtensiveChannel::DryMass;
+    let err_lin = reconcile_flow_graph(&LinearFlowRequest {
+        graph: &cil_graph,
+        channel: ch.clone(),
+        measurements: vec![
+            MeasuredVariable {
+                key: VariableKey::Stream {
+                    stream_id: "in_s".to_string(),
+                    channel: ch.clone(),
+                },
+                observed: 100.0,
+                std_dev: 1.0,
+            },
+            MeasuredVariable {
+                key: VariableKey::Stream {
+                    stream_id: "out_s".to_string(),
+                    channel: ch.clone(),
+                },
+                observed: 98.0,
+                std_dev: 1.0,
+            },
+        ],
+        off_diagonal_covariances: Vec::new(),
+        enforce_non_negative_streams: true,
+    })
+    .expect_err("holds_inventory PlantUnit without InventoryDelta must refuse");
+    assert_eq!(
+        err_lin.to_refusal().code,
+        RefusalCode::SupportMismatch102.as_str()
+    );
+
+    // 2. Canceling terms [(x, +1), (x, -1)] in reconcile_named_system must refuse as all-zero row.
+    let k_x = VariableKey::Named {
+        name: "x".to_string(),
+        channel: ch.clone(),
+    };
+    let cancel_err = reconcile_named_system(&NamedLinearRequest {
+        measurements: vec![MeasuredVariable {
+            key: k_x.clone(),
+            observed: 100.0,
+            std_dev: 1.0,
+        }],
+        off_diagonal_covariances: Vec::new(),
+        constraints: vec![NamedLinearConstraint {
+            label: "canceling".to_string(),
+            terms: vec![(k_x.clone(), 1.0), (k_x, -1.0)],
+            target: 0.0,
+        }],
+    })
+    .expect_err("canceling terms must refuse");
+    assert_eq!(
+        cancel_err.to_refusal().code,
+        RefusalCode::OutsidePhysicalDomain109.as_str()
+    );
+
+    // 3. GrossErrorPolicy refuses target_power <= alpha.
+    let bad_policy = GrossErrorPolicy {
+        global_alpha: 0.05,
+        measurement_alpha: 0.10,
+        target_power: 0.08,
+        ..GrossErrorPolicy::default()
+    };
+    assert_eq!(
+        bad_policy
+            .validate()
+            .expect_err("target_power <= measurement_alpha")
+            .to_refusal()
+            .code,
+        RefusalCode::OutsidePhysicalDomain109.as_str()
+    );
+
+    // 4. Huge bias (10,000 sigma -> lambda ~ 1e8) in analyze_bias_power must not truncate or
+    //    overflow; Sankaran 3-moment branch returns exact 1.0.
+    let g = build_concentrator_graph().expect("concentrator");
+    let feed_k = VariableKey::Stream {
+        stream_id: "feed".to_string(),
+        channel: ch.clone(),
+    };
+    let rec = reconcile_flow_graph(&LinearFlowRequest {
+        graph: &g,
+        channel: ch.clone(),
+        measurements: vec![
+            MeasuredVariable {
+                key: feed_k.clone(),
+                observed: 1000.0,
+                std_dev: 10.0,
+            },
+            MeasuredVariable {
+                key: VariableKey::Stream {
+                    stream_id: "conc".to_string(),
+                    channel: ch.clone(),
+                },
+                observed: 100.0,
+                std_dev: 1.0,
+            },
+            MeasuredVariable {
+                key: VariableKey::Stream {
+                    stream_id: "tails".to_string(),
+                    channel: ch,
+                },
+                observed: 900.0,
+                std_dev: 10.0,
+            },
+        ],
+        off_diagonal_covariances: Vec::new(),
+        enforce_non_negative_streams: true,
+    })
+    .expect("conc rec");
+    let huge = analyze_bias_power(
+        &rec,
+        &GrossErrorPolicy::default(),
+        &BiasVectorSpec {
+            biases: vec![(feed_k, 1.0e6)], // ~70,000 sigma -> lambda ~ 5e9!
+            periods: 3,
+        },
+    )
+    .expect("large lambda power");
+    assert!(huge.global_non_centrality > 1.0e8);
+    assert!(
+        (huge.global_power - 1.0).abs() < 1e-12,
+        "large lambda global power must be 1.0, got {}",
+        huge.global_power
     );
 }

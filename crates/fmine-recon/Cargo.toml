@@ -12,6 +12,7 @@ description = "Touchstone reconciliation engine: linear WLS with covariance, obs
 workspace = true
 
 [dependencies]
+fmine-claim = { path = "../fmine-claim" }
 fmine-core = { path = "../fmine-core" }
 fmine-evidence = { path = "../fmine-evidence" }
 fmine-flow = { path = "../fmine-flow" }

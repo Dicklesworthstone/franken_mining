@@ -999,6 +999,7 @@ dependencies = [
 name = "fmine-recon"
 version = "0.1.0"
 dependencies = [
+ "fmine-claim",
  "fmine-core",
  "fmine-evidence",
  "fmine-flow",
@@ -1082,6 +1083,7 @@ dependencies = [
 name = "fmine-verify"
 version = "0.1.0"
 dependencies = [
+ "fmine-calib",
  "fmine-core",
  "fmine-evidence",
  "fmine-flow",

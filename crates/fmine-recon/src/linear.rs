@@ -592,7 +592,6 @@ pub fn reconcile_named_system(
                 format!("constraint '{}' has non-finite target", c.label),
             ));
         }
-        let mut has_nonzero = false;
         for (var, coeff) in &c.terms {
             if !coeff.is_finite() {
                 return Err(ReconError::invalid(
@@ -611,14 +610,13 @@ pub fn reconcile_named_system(
                 ));
             };
             constraints[r * n + idx] += *coeff;
-            if constraints[r * n + idx] != 0.0 {
-                has_nonzero = true;
-            }
         }
-        if !has_nonzero {
+        // Audit after accumulating all terms so canceling duplicates like [(x, +1), (x, -1)]
+        // are caught as an all-zero constraint row.
+        if constraints[r * n..(r + 1) * n].iter().all(|&v| v == 0.0) {
             return Err(ReconError::invalid(
                 "constraint.terms",
-                format!("constraint '{}' has all-zero coefficients", c.label),
+                format!("constraint '{}' has all-zero net coefficients", c.label),
             ));
         }
         constraint_names.push(c.label.clone());
@@ -764,6 +762,14 @@ fn validate_flow_measurement_keys(
                         format!("node '{node_id}' does not hold inventory"),
                     ));
                 }
+                if !graph.interior_nodes().iter().any(|n| n.id == *node_id) {
+                    return Err(ReconError::invalid(
+                        "measurements",
+                        format!(
+                            "inventory delta on boundary node '{node_id}' has no interior conservation equation"
+                        ),
+                    ));
+                }
             }
             VariableKey::Named { name, .. } => {
                 return Err(ReconError::invalid(
@@ -847,10 +853,10 @@ pub fn reconcile_flow_graph(
         };
         if measured_keys.contains(&inv_key) {
             terms.push((inv_key, -1.0));
-        } else if node.class == NodeClass::StockpileOrPad {
+        } else if node.class == NodeClass::StockpileOrPad || node.holds_inventory {
             return Err(ReconError::StockpileDecouplingRefused {
                 detail: format!(
-                    "stockpile node '{}' requires an explicit InventoryDelta observation (cannot assume Δ inventory = 0)",
+                    "inventory-holding node '{}' requires an explicit InventoryDelta observation (cannot assume Δ inventory = 0)",
                     node.id
                 ),
             });
@@ -959,6 +965,19 @@ pub fn reconcile_partial_flow_graph(
                         format!("node '{node_id}' does not hold inventory"),
                     ));
                 }
+                if !request
+                    .graph
+                    .interior_nodes()
+                    .iter()
+                    .any(|n| n.id == *node_id)
+                {
+                    return Err(ReconError::invalid(
+                        "partial.unmeasured",
+                        format!(
+                            "unmeasured inventory delta on boundary node '{node_id}' has no interior balance equation"
+                        ),
+                    ));
+                }
             }
             VariableKey::Named { name, .. } => {
                 return Err(ReconError::invalid(
@@ -1055,10 +1074,10 @@ pub fn reconcile_partial_flow_graph(
         };
         if meas_idx.contains_key(&inv_key) || latent_idx.contains_key(&inv_key) {
             place(inv_key, -1.0)?;
-        } else if node.class == NodeClass::StockpileOrPad {
+        } else if node.class == NodeClass::StockpileOrPad || node.holds_inventory {
             return Err(ReconError::StockpileDecouplingRefused {
                 detail: format!(
-                    "stockpile node '{}' must declare its InventoryDelta as measured or unmeasured",
+                    "inventory-holding node '{}' must declare its InventoryDelta as measured or unmeasured",
                     node.id
                 ),
             });

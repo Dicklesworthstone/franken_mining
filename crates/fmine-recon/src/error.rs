@@ -29,6 +29,21 @@ pub enum ReconError {
         /// Correlated bias pair or unobservable stream detail.
         detail: String,
     },
+    /// F-factor rendered or certified without its definition version or interval (`G-TOUCH-4`, `FMINE-REF-107`).
+    MissingDefinitionVersion {
+        /// Diagnostic detail.
+        detail: String,
+    },
+    /// Factor applied as a direct multiplier to a future estimate instead of a Strata bias prior (`G-TOUCH-5`, `FMINE-REF-109`).
+    FactorMultiplierRefused {
+        /// Diagnostic detail.
+        detail: String,
+    },
+    /// Tampered, malformed, or digest-mismatched `ReconciliationCertificate` (`PO-TOUCH-6`, `FMINE-REF-505`).
+    CertificateTampered {
+        /// Diagnostic detail.
+        detail: String,
+    },
     /// Parameter or measurement outside physical or statistical domain (`FMINE-REF-109`).
     InvalidParameter {
         /// Field name.
@@ -78,6 +93,15 @@ impl ReconError {
             Self::NonIdentifiable { .. } => {
                 Refusal::new(RefusalCode::NonIdentifiableAttribution104, self.to_string())
             }
+            Self::MissingDefinitionVersion { .. } => {
+                Refusal::new(RefusalCode::UndeclaredUnitBasisOrTz107, self.to_string())
+            }
+            Self::FactorMultiplierRefused { .. } => {
+                Refusal::new(RefusalCode::OutsidePhysicalDomain109, self.to_string())
+            }
+            Self::CertificateTampered { .. } => {
+                Refusal::new(RefusalCode::DigestMismatch505, self.to_string())
+            }
             Self::InvalidParameter { .. } => {
                 Refusal::new(RefusalCode::OutsidePhysicalDomain109, self.to_string())
             }
@@ -119,6 +143,15 @@ impl fmt::Display for ReconError {
             }
             Self::NonIdentifiable { detail } => {
                 write!(f, "G-TOUCH-2 non-identifiable attribution/flow: {detail}")
+            }
+            Self::MissingDefinitionVersion { detail } => {
+                write!(f, "G-TOUCH-4 missing F-factor definition version: {detail}")
+            }
+            Self::FactorMultiplierRefused { detail } => {
+                write!(f, "G-TOUCH-5 factor multiplier refused: {detail}")
+            }
+            Self::CertificateTampered { detail } => {
+                write!(f, "reconciliation certificate integrity failed: {detail}")
             }
             Self::InvalidParameter { field, detail } => write!(f, "{field}: {detail}"),
             Self::InsufficientRedundancy { context, detail } => {

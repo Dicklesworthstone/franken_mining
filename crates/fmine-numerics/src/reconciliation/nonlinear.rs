@@ -172,8 +172,8 @@ fn evaluate_kkt_from_raw(
         .collect::<Result<Vec<_>>>()?;
     let normal = covariance_congruence(&covariance, constraints, n, m)?;
     let normal_factor = ScaledSpd::new(&normal, m)?;
-    let multipliers = normal_factor.solve(&raw_d)?;
-    let dual = (0..n)
+    let mut multipliers = normal_factor.solve(&raw_d)?;
+    let mut dual = (0..n)
         .map(|i| {
             dot(
                 &(0..m).map(|r| constraints[r * n + i]).collect::<Vec<_>>(),
@@ -192,10 +192,15 @@ fn evaluate_kkt_from_raw(
         .map(|v| -v)
         .collect::<Vec<_>>();
     // One iterative feasibility projection ensures A(x + d) = b to machine precision.
+    // Keep multipliers and dual = A^T multipliers algebraically consistent with the
+    // refined step so H d + g + A^T lam = 0 and the exact merit slope match identically.
     let feas_residual = (0..m)
         .map(|r| Ok(dot(&constraints[r * n..(r + 1) * n], &direction)? + residuals[r]))
         .collect::<Result<Vec<_>>>()?;
     let delta_lam = normal_factor.solve(&feas_residual)?;
+    for (lam, dlam) in multipliers.iter_mut().zip(&delta_lam) {
+        *lam += *dlam;
+    }
     let corr_rhs = (0..n)
         .map(|i| {
             dot(
@@ -204,6 +209,9 @@ fn evaluate_kkt_from_raw(
             )
         })
         .collect::<Result<Vec<_>>>()?;
+    for (di, ci) in dual.iter_mut().zip(&corr_rhs) {
+        *di += *ci;
+    }
     let corr = hessian_factor.solve(&corr_rhs)?;
     for (di, ci) in direction.iter_mut().zip(&corr) {
         *di -= *ci;
@@ -361,7 +369,11 @@ pub fn reconcile_nonlinear(
         }
         let cur_kkt = cur.relative_stationarity.max(cur.relative_step);
         let mut alpha = 1.0;
-        let mut accepted: Option<(Vec<f64>, Option<KktEvaluation>)> = None;
+        enum StepAccept {
+            RawEval(Vec<f64>, Vec<f64>, Vec<f64>),
+            FullKkt(Vec<f64>, KktEvaluation),
+        }
+        let mut accepted: Option<StepAccept> = None;
         for bt in 0..MAX_BACKTRACKS {
             let candidate = x
                 .iter()
@@ -389,7 +401,7 @@ pub fn reconcile_nonlinear(
                 let next_violation = next_residuals.iter().map(|v| v.abs()).sum::<f64>();
                 let delta_merit = 0.5 * delta_obj + penalty * (next_violation - violation);
                 if delta_merit.is_finite() && delta_merit <= 1e-4 * alpha * slope {
-                    accepted = Some((candidate, None));
+                    accepted = Some(StepAccept::RawEval(candidate, values, cand_jac));
                     break;
                 }
                 // Near IEEE-754 f64 evaluation noise of 0.5 * r^T R^-1 r, the true
@@ -425,7 +437,7 @@ pub fn reconcile_nonlinear(
                         || (cand_kkt.relative_stationarity <= KKT_TOLERANCE
                             && cand_kkt.relative_step <= KKT_TOLERANCE)
                     {
-                        accepted = Some((candidate, Some(cand_kkt)));
+                        accepted = Some(StepAccept::FullKkt(candidate, cand_kkt));
                         break;
                     }
                 }
@@ -433,15 +445,16 @@ pub fn reconcile_nonlinear(
             backtracks += 1;
             alpha *= 0.5;
         }
-        let (next_x, next_kkt) = accepted.ok_or_else(|| {
+        match accepted.ok_or_else(|| {
             refuse("physical-domain merit line search exhausted; no values were clamped")
-        })?;
-        x = next_x;
-        cur = match next_kkt {
-            Some(eval) => eval,
-            None => {
-                let (next_res, next_jac) = evaluate_checked(&evaluate, &x, p)?;
-                evaluate_kkt_from_raw(
+        })? {
+            StepAccept::FullKkt(next_x, eval) => {
+                x = next_x;
+                cur = eval;
+            }
+            StepAccept::RawEval(next_x, next_res, next_jac) => {
+                x = next_x;
+                cur = evaluate_kkt_from_raw(
                     &x,
                     next_res,
                     &next_jac,
@@ -451,9 +464,9 @@ pub fn reconcile_nonlinear(
                     n,
                     m,
                     p,
-                )?
+                )?;
             }
-        };
+        }
     }
     Err(refuse("unreachable iteration state"))
 }
