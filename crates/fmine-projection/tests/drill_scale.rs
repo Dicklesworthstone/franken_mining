@@ -53,11 +53,13 @@ fn grid_side(holes: usize) -> usize {
     (1..).find(|s| s * s >= holes).unwrap()
 }
 
-fn hole_changes(h: usize, side: usize, relog: bool) -> Vec<Change> {
+/// Hole `h`'s records, or with `relog` = `Some(shift_mm)` its intervals relogged `shift_mm` deeper.
+fn hole_changes(h: usize, side: usize, relog: Option<u64>) -> Vec<Change> {
     let hole_id = format!("H{h:06}");
     let (col, row) = (h % side, h / side);
     let mut out = Vec::with_capacity(4 + INTERVALS_PER_HOLE);
-    if !relog {
+    let shift = relog.unwrap_or(0);
+    if relog.is_none() {
         out.push(Change::Put(DrillRecord::Collar(Collar {
             hole_id: hole_id.clone(),
             hole_type: HoleType::Diamond,
@@ -94,12 +96,12 @@ fn hole_changes(h: usize, side: usize, relog: bool) -> Vec<Change> {
         let interval = DrillRecord::Interval(Interval {
             interval_id: format!("{hole_id}-I{i:03}"),
             hole_id: hole_id.clone(),
-            from_mm: 1_000 * i as u64,
-            to_mm: 1_000 * (i as u64 + 1),
+            from_mm: shift + 1_000 * i as u64,
+            to_mm: shift + 1_000 * (i as u64 + 1),
             recovery: None,
             lithology: if i % 7 == 0 { "GRANITE" } else { "SCHIST" }.to_string(),
             alteration: None,
-            mineralization: if relog {
+            mineralization: if relog.is_some() {
                 "pyrite veins relogged"
             } else {
                 "pyrite veins"
@@ -110,7 +112,7 @@ fn hole_changes(h: usize, side: usize, relog: bool) -> Vec<Change> {
                 logger_id: "geo-07".to_string(),
             },
         });
-        out.push(if relog {
+        out.push(if relog.is_some() {
             Change::Supersede {
                 record: interval,
                 reason: "relogged".to_string(),
@@ -193,14 +195,14 @@ fn test_bbox_p99_over_ten_million_intervals() {
     let side = grid_side(holes);
 
     let mut store = DrillStore::open(dir.join("drill.db")).unwrap();
-    store.defer_spatial_index(true);
+    store.defer_indexes(true);
     let mut projection = Projection::open(store).unwrap();
     let (mut seq, mut prev) = (0_u64, GENESIS_PREV_HASH);
     let started = Instant::now();
     let mut slowest = Duration::ZERO;
     for first in (0..holes).step_by(HOLES_PER_BATCH) {
         let changes: Vec<Change> = (first..(first + HOLES_PER_BATCH).min(holes))
-            .flat_map(|h| hole_changes(h, side, false))
+            .flat_map(|h| hole_changes(h, side, None))
             .collect();
         let batch = chained(seq, prev, &changes);
         let t = Instant::now();
@@ -230,10 +232,10 @@ fn test_bbox_p99_over_ten_million_intervals() {
 
     let mut store = projection.into_projector();
     let t = Instant::now();
-    store.rebuild_spatial_index().unwrap();
-    store.defer_spatial_index(false);
+    store.rebuild_indexes().unwrap();
+    store.defer_indexes(false);
     report(format!(
-        "{{\"phase\":\"rtree_load\",\"rows\":{intervals},\"seconds\":{:.1},\"rss_mib\":{}}}",
+        "{{\"phase\":\"index_load\",\"rows\":{intervals},\"seconds\":{:.1},\"rss_mib\":{}}}",
         t.elapsed().as_secs_f64(),
         rss_kib() / 1024
     ));
@@ -280,13 +282,39 @@ fn test_bbox_p99_over_ten_million_intervals() {
         }
     }
 
+    // Two relogs of one hole's intervals with the indexes current: new text on the same depths (text rows only),
+    // then the same text 0.5 m deeper (R-tree rows only).
     let mut projection = Projection::open(store).unwrap();
-    let relog = chained(seq, prev, &hole_changes(holes / 2, side, true));
-    let t = Instant::now();
-    projection.feed(&relog).unwrap();
+    for (name, shift_mm) in [("relog_text", 0), ("relog_depths", 500)] {
+        let relog = chained(seq, prev, &hole_changes(holes / 2, side, Some(shift_mm)));
+        let t = Instant::now();
+        projection.feed(&relog).unwrap();
+        let garbage = projection.projector().index_garbage();
+        report(format!(
+            "{{\"phase\":\"{name}\",\"intervals\":{INTERVALS_PER_HOLE},\"ms\":{:.1},\"stale_boxes\":{},\
+             \"stale_texts\":{}}}",
+            ms(t.elapsed()),
+            garbage.stale_boxes,
+            garbage.stale_texts
+        ));
+        prev = relog.batch_digest().unwrap();
+        seq += 1;
+    }
+    let mut times = Vec::new();
+    for _ in 0..20 {
+        let t = Instant::now();
+        assert_eq!(
+            projection.projector().text("relogged").unwrap().len(),
+            INTERVALS_PER_HOLE
+        );
+        times.push(t.elapsed());
+    }
+    times.sort();
     report(format!(
-        "{{\"phase\":\"incremental_relog\",\"intervals\":{INTERVALS_PER_HOLE},\"ms\":{:.1}}}",
-        ms(t.elapsed())
+        "{{\"phase\":\"text\",\"query\":\"relogged\",\"hits\":{INTERVALS_PER_HOLE},\"queries\":20,\
+         \"p50_ms\":{:.3},\"max_ms\":{:.3}}}",
+        ms(quantile(&times, 0.5)),
+        ms(times[times.len() - 1])
     ));
     let mid = holes / 2;
     let corner = [
@@ -303,9 +331,5 @@ fn test_bbox_p99_over_ten_million_intervals() {
     assert!(
         near.iter().any(|r| r.hole_id == format!("H{mid:06}")),
         "{near:?}"
-    );
-    assert_eq!(
-        projection.projector().text("relogged").unwrap().len(),
-        INTERVALS_PER_HOLE
     );
 }

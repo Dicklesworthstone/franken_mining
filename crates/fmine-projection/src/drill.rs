@@ -10,15 +10,23 @@
 //!   recomputes the box of every interval on its hole. An interval on a hole that has no trace (no collar, no
 //!   surveyed station, or a desurvey refusal) has no box, so [`DrillStore::bbox`] never returns it;
 //!   [`DrillStore::unlocated_holes`] names those holes with the reason.
-//! - **R-tree.** `drill_interval_box` is fsqlite's `rtree`. It stores `f32` rounded outward, about 1 m at a
-//!   northing of 8.6 × 10⁶ m, so [`DrillStore::bbox`] checks each candidate against the exact `f64` box in
-//!   `drill_interval`. An answer is exactly the intervals whose box meets the query box. fsqlite 0.5.1 copies the
-//!   whole R-tree on the first write of each statement, so each batch writes it in at most a few statements of up
-//!   to [`RTREE_ROWS_PER_STATEMENT`] rows. A rebuild can defer the R-tree and load it once at the end
-//!   ([`DrillStore::defer_spatial_index`], [`DrillStore::rebuild_spatial_index`]). Until then
-//!   [`DrillStore::bbox`] refuses ([`DrillStoreError::SpatialIndexStale`]).
-//! - **Text.** `drill_interval_text` (FTS5) indexes each interval's lithology, mineralization, weathering and
-//!   alteration. [`DrillStore::text`] takes an FTS5 query.
+//! - **Indexes.** `drill_interval_box` is fsqlite's `rtree` and `drill_interval_text` its FTS5 over each
+//!   interval's lithology, mineralization, weathering and alteration. Both are append-only: a box or text that
+//!   changes gets a new index row under a new id (`bid`, `tid`), and `drill_interval` records which id is current.
+//!   [`DrillStore::bbox`] and [`DrillStore::text`] look each index hit up by that id and drop the ones that are not
+//!   current, so a superseded row never answers. The R-tree stores `f32` rounded outward (about 1 m at a northing
+//!   of 8.6 × 10⁶ m), so [`DrillStore::bbox`] also checks each hit against the exact `f64` box: an answer is
+//!   exactly the intervals whose box meets the query box. A box or text that a batch leaves as it was keeps its
+//!   row.
+//! - **Why append-only.** In fsqlite 0.5.1 a delete from either index costs a pass over the whole index (an FTS5
+//!   delete by rowid, about 0.6 s per row at 10⁵ rows), and each statement that writes the R-tree copies it. So the
+//!   store never deletes index rows in a batch, and writes each index in a few statements of up to
+//!   [`RTREE_ROWS_PER_STATEMENT`] rows. [`DrillStore::index_garbage`] counts the superseded rows;
+//!   [`DrillStore::rebuild_indexes`] drops both indexes and reloads them from `drill_interval`.
+//! - **Deferred indexes.** A rebuild from the ledger can skip the indexes batch by batch
+//!   ([`DrillStore::defer_indexes`]) and load them once ([`DrillStore::rebuild_indexes`]). Until then, and if a
+//!   rebuild stopped half way, [`DrillStore::bbox`] and [`DrillStore::text`] refuse
+//!   ([`DrillStoreError::IndexStale`]).
 //!
 //! The store is read and written through `fsqlite::blocking::Connection` only (INT-FSQL-001 criterion 10).
 
@@ -34,7 +42,7 @@ use fmine_drill::records::{DrillRecord, Interval, RecordKind, RecordVersion, dec
 use fmine_drill::store::{KEY_PREFIX, parse_key, record_key};
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_ledger::batch::{DeltaBatch, DeltaKind};
-use fsqlite::blocking::{Connection, Error as SqlError, ToSql, params};
+use fsqlite::blocking::{Connection, Error as SqlError, Params, Row, ToSql, params};
 
 use crate::mark::HighWaterMark;
 use crate::projection::Projector;
@@ -42,7 +50,7 @@ use boxes::{Box3, interval_box};
 
 /// The schema this module writes, recorded in `projection_meta`. A store with another is refused.
 pub const SCHEMA: &str = "fmine.projection.drill.v1";
-/// The most rows one R-tree statement writes or deletes.
+/// The most rows one R-tree statement writes.
 pub const RTREE_ROWS_PER_STATEMENT: usize = 4096;
 /// The most rows one FTS5 insert writes (two parameters each).
 const TEXT_ROWS_PER_STATEMENT: usize = 512;
@@ -51,6 +59,7 @@ const META_DDL: &str =
     "CREATE TABLE IF NOT EXISTS projection_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)";
 const DDL: &str = "
 CREATE TABLE IF NOT EXISTS projection_mark(cell_id TEXT PRIMARY KEY, applied INTEGER NOT NULL, head BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS projection_counter(key TEXT PRIMARY KEY, value INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS drill_record(cell_id TEXT NOT NULL, key TEXT NOT NULL, kind TEXT NOT NULL,
   record_id TEXT NOT NULL, hole_id TEXT, versions INTEGER NOT NULL, seq INTEGER NOT NULL, payload BLOB NOT NULL,
   PRIMARY KEY(cell_id, key));
@@ -58,12 +67,19 @@ CREATE INDEX IF NOT EXISTS drill_record_hole ON drill_record(cell_id, hole_id, k
 CREATE TABLE IF NOT EXISTS drill_hole(cell_id TEXT NOT NULL, hole_id TEXT NOT NULL, crs TEXT NOT NULL,
   located INTEGER NOT NULL, reason TEXT, PRIMARY KEY(cell_id, hole_id));
 CREATE TABLE IF NOT EXISTS drill_interval(rid INTEGER PRIMARY KEY, cell_id TEXT NOT NULL, interval_id TEXT NOT NULL,
-  hole_id TEXT NOT NULL, from_mm INTEGER NOT NULL, to_mm INTEGER NOT NULL, body TEXT NOT NULL, crs TEXT,
-  min_e REAL, max_e REAL, min_n REAL, max_n REAL, min_z REAL, max_z REAL, UNIQUE(cell_id, interval_id));
+  hole_id TEXT NOT NULL, from_mm INTEGER NOT NULL, to_mm INTEGER NOT NULL, body TEXT NOT NULL, tid INTEGER NOT NULL,
+  bid INTEGER, crs TEXT, min_e REAL, max_e REAL, min_n REAL, max_n REAL, min_z REAL, max_z REAL,
+  UNIQUE(cell_id, interval_id));
 CREATE INDEX IF NOT EXISTS drill_interval_hole ON drill_interval(cell_id, hole_id);
-CREATE VIRTUAL TABLE IF NOT EXISTS drill_interval_box USING rtree(id, min_e, max_e, min_n, max_n, min_z, max_z);
-CREATE VIRTUAL TABLE IF NOT EXISTS drill_interval_text USING fts5(body);
+CREATE UNIQUE INDEX IF NOT EXISTS drill_interval_bid ON drill_interval(bid);
+CREATE UNIQUE INDEX IF NOT EXISTS drill_interval_tid ON drill_interval(tid);
 ";
+const CREATE_BOX_INDEX: &str = "CREATE VIRTUAL TABLE IF NOT EXISTS drill_interval_box USING \
+                                rtree(id, min_e, max_e, min_n, max_n, min_z, max_z)";
+const CREATE_TEXT_INDEX: &str =
+    "CREATE VIRTUAL TABLE IF NOT EXISTS drill_interval_text USING fts5(body)";
+/// The columns [`read_prior`] reads, in its order.
+const PRIOR_COLUMNS: &str = "bid, crs, min_e, max_e, min_n, max_n, min_z, max_z";
 
 /// A drill projection store that failed or refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,8 +103,8 @@ pub enum DrillStoreError {
         /// The schema it records.
         found: String,
     },
-    /// The R-tree does not hold every box yet: [`DrillStore::rebuild_spatial_index`] first.
-    SpatialIndexStale,
+    /// The R-tree and text index do not hold every interval: [`DrillStore::rebuild_indexes`] first.
+    IndexStale,
     /// A depth, count or sequence beyond what SQLite's 64-bit integers hold.
     Range {
         /// What it was.
@@ -104,7 +120,7 @@ impl DrillStoreError {
     #[must_use]
     pub fn to_refusal(&self) -> Refusal {
         match self {
-            Self::SpatialIndexStale => Refusal::new(RefusalCode::StaleAnchor502, self.to_string()),
+            Self::IndexStale => Refusal::new(RefusalCode::StaleAnchor502, self.to_string()),
             _ => Refusal::new(RefusalCode::InputMissingOrUnreadable506, self.to_string()),
         }
     }
@@ -119,16 +135,15 @@ impl fmt::Display for DrillStoreError {
                 f,
                 "drill projection: the store holds schema '{found}', not '{SCHEMA}'; rebuild it from the ledger"
             ),
-            Self::SpatialIndexStale => write!(
+            Self::IndexStale => write!(
                 f,
-                "drill projection: the spatial index was deferred and does not hold every box; rebuild it first"
+                "drill projection: the R-tree and text index were deferred or their rebuild stopped, and they do \
+                 not hold every interval; rebuild them first"
             ),
-            Self::Range { what, value } => {
-                write!(
-                    f,
-                    "drill projection: {what} {value} is past SQLite's integer range"
-                )
-            }
+            Self::Range { what, value } => write!(
+                f,
+                "drill projection: {what} {value} is past SQLite's integer range"
+            ),
         }
     }
 }
@@ -192,6 +207,36 @@ fn hole_of(record: &DrillRecord) -> Option<&str> {
     }
 }
 
+/// A CRS and box from their nullable columns: `None` unless every one is set and the box is well formed.
+fn located(crs: Option<String>, v: [Option<f64>; 6]) -> Option<(String, Box3)> {
+    match (crs, v) {
+        (
+            Some(crs),
+            [
+                Some(min_e),
+                Some(max_e),
+                Some(min_n),
+                Some(max_n),
+                Some(min_z),
+                Some(max_z),
+            ],
+        ) => Box3::new([min_e, min_n, min_z], [max_e, max_n, max_z]).map(|b| (crs, b)),
+        _ => None,
+    }
+}
+
+/// [`PRIOR_COLUMNS`] from `r`, starting at column `at`.
+fn read_prior(r: &Row<'_>, at: usize) -> Result<Prior, SqlError> {
+    let mut v = [None; 6];
+    for (k, slot) in v.iter_mut().enumerate() {
+        *slot = r.get::<_, Option<f64>>(at + 2 + k)?;
+    }
+    Ok(Prior {
+        bid: r.get(at)?,
+        located: located(r.get(at + 1)?, v),
+    })
+}
+
 /// An interval an answer names.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct IntervalRef {
@@ -240,20 +285,56 @@ pub struct UnlocatedHole {
     pub reason: String,
 }
 
+/// Superseded index rows that no answer uses, kept until [`DrillStore::rebuild_indexes`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct IndexGarbage {
+    /// R-tree rows of boxes since replaced or removed.
+    pub stale_boxes: u64,
+    /// FTS5 rows of texts since replaced.
+    pub stale_texts: u64,
+}
+
+/// An interval's box as the store held it before this batch.
+#[derive(Clone)]
+struct Prior {
+    /// Its R-tree id; `None` when it had no box.
+    bid: Option<i64>,
+    located: Option<(String, Box3)>,
+}
+
 /// An interval whose box must be (re)computed in this batch.
 struct Span {
     hole_id: String,
     from_mm: u64,
     to_mm: u64,
-    /// Whether it had a row before this batch, so possibly an R-tree row to replace.
-    existed: bool,
+    /// `None` for an interval new in this batch.
+    prior: Option<Prior>,
+}
+
+/// What writing an interval's row gives back.
+struct Upserted {
+    rid: i64,
+    /// Its box before this batch; `None` for an interval new in this batch.
+    prior: Option<Prior>,
+    /// Its text with a new text id, when the text is new or changed.
+    text: Option<(i64, String)>,
+}
+
+/// Row and index ids, and garbage counts. Restored when a transaction rolls back.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Counters {
+    next_rid: i64,
+    next_bid: i64,
+    next_tid: i64,
+    stale_boxes: i64,
+    stale_texts: i64,
 }
 
 /// The fsqlite drillhole projection store. See the module documentation.
 pub struct DrillStore {
     conn: Connection,
-    defer_index: bool,
-    next_rid: i64,
+    defer: bool,
+    counters: Counters,
     #[cfg(test)]
     crash_at: std::cell::Cell<Option<u64>>,
     #[cfg(test)]
@@ -264,8 +345,8 @@ impl fmt::Debug for DrillStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DrillStore")
             .field("path", &self.conn.path())
-            .field("defer_index", &self.defer_index)
-            .field("next_rid", &self.next_rid)
+            .field("defer", &self.defer)
+            .field("counters", &self.counters)
             .finish_non_exhaustive()
     }
 }
@@ -301,13 +382,24 @@ impl DrillStore {
             Some(_) => {}
             None => {
                 conn.execute_batch("BEGIN").map_err(sql("begin"))?;
-                let created = conn.execute_batch(DDL).map_err(sql("create the tables")).and_then(|()| {
-                    conn.execute(
-                        "INSERT INTO projection_meta(key, value) VALUES ('schema', ?1), ('spatial_index', 'current')",
-                        params![SCHEMA],
-                    )
-                    .map_err(sql("record the schema"))
-                });
+                let created = conn
+                    .execute_batch(DDL)
+                    .map_err(sql("create the tables"))
+                    .and_then(|()| {
+                        conn.execute(
+                            "INSERT INTO projection_meta(key, value) VALUES ('schema', ?1), ('indexes', 'current')",
+                            params![SCHEMA],
+                        )
+                        .map_err(sql("record the schema"))
+                    })
+                    .and_then(|_| {
+                        conn.execute(
+                            "INSERT INTO projection_counter(key, value) VALUES ('next_bid', 1), ('next_tid', 1), \
+                             ('stale_boxes', 0), ('stale_texts', 0)",
+                            params![],
+                        )
+                        .map_err(sql("start the counters"))
+                    });
                 match created {
                     Ok(_) => conn
                         .execute_batch("COMMIT")
@@ -319,17 +411,49 @@ impl DrillStore {
                 }
             }
         }
-        let next_rid = conn
-            .query_row(
-                "SELECT COALESCE(MAX(rid), 0) + 1 FROM drill_interval",
-                params![],
-                |r| r.get::<_, i64>(0),
-            )
-            .map_err(sql("read the next interval row"))?;
+        // Recreate an index a stopped rebuild dropped; the store then records the indexes as stale.
+        for ddl in [CREATE_BOX_INDEX, CREATE_TEXT_INDEX] {
+            conn.execute_batch(ddl)
+                .map_err(sql("create an index table"))?;
+        }
+        let mut counters = Counters {
+            next_rid: conn
+                .query_row(
+                    "SELECT COALESCE(MAX(rid), 0) + 1 FROM drill_interval",
+                    params![],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map_err(sql("read the next interval row"))?,
+            ..Counters::default()
+        };
+        let rows = conn
+            .prepare("SELECT key, value FROM projection_counter")
+            .and_then(|mut st| {
+                st.query_map(params![], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()
+            })
+            .map_err(sql("read the counters"))?;
+        for (key, value) in rows {
+            match key.as_str() {
+                "next_bid" => counters.next_bid = value,
+                "next_tid" => counters.next_tid = value,
+                "stale_boxes" => counters.stale_boxes = value,
+                "stale_texts" => counters.stale_texts = value,
+                _ => {}
+            }
+        }
+        if counters.next_bid < 1 || counters.next_tid < 1 {
+            return Err(DrillStoreError::Sql {
+                what: "read the counters",
+                error: format!("next ids {counters:?} are not positive"),
+            });
+        }
         Ok(Self {
             conn,
-            defer_index: false,
-            next_rid,
+            defer: false,
+            counters,
             #[cfg(test)]
             crash_at: std::cell::Cell::new(None),
             #[cfg(test)]
@@ -337,55 +461,89 @@ impl DrillStore {
         })
     }
 
-    /// Defer R-tree writes (`true`) or keep the R-tree current batch by batch (`false`, the default). While
-    /// deferred, each apply leaves the index stale, and [`DrillStore::bbox`] refuses until
-    /// [`DrillStore::rebuild_spatial_index`]. For a rebuild from the ledger: one R-tree load instead of a write
-    /// per batch, each of which copies the whole tree in fsqlite 0.5.1.
-    pub const fn defer_spatial_index(&mut self, defer: bool) {
-        self.defer_index = defer;
+    /// Skip the R-tree and text index batch by batch (`true`) or keep them current (`false`, the default). While
+    /// deferred, each apply leaves the indexes stale, and [`DrillStore::bbox`] and [`DrillStore::text`] refuse
+    /// until [`DrillStore::rebuild_indexes`]. For a rebuild from the ledger: one load of each index instead of a
+    /// write per batch.
+    pub const fn defer_indexes(&mut self, defer: bool) {
+        self.defer = defer;
     }
 
-    /// Whether the R-tree holds exactly the boxes in `drill_interval`.
+    /// Whether the R-tree and text index hold a row for every box and text in `drill_interval`.
     ///
     /// # Errors
     /// [`DrillStoreError::Sql`] if the engine fails.
-    pub fn spatial_index_is_current(&self) -> Result<bool, DrillStoreError> {
+    pub fn indexes_are_current(&self) -> Result<bool, DrillStoreError> {
         let state = self
             .conn
             .query_row(
-                "SELECT value FROM projection_meta WHERE key = 'spatial_index'",
+                "SELECT value FROM projection_meta WHERE key = 'indexes'",
                 params![],
                 |r| r.get::<_, String>(0),
             )
-            .map_err(sql("read the spatial index state"))?;
+            .map_err(sql("read the index state"))?;
         Ok(state == "current")
     }
 
-    /// Reload the R-tree from the boxes in `drill_interval`, in one transaction, and mark it current.
+    /// The superseded index rows the store holds.
+    #[must_use]
+    pub fn index_garbage(&self) -> IndexGarbage {
+        IndexGarbage {
+            stale_boxes: self.counters.stale_boxes.unsigned_abs(),
+            stale_texts: self.counters.stale_texts.unsigned_abs(),
+        }
+    }
+
+    /// Drop the R-tree and text index and reload them from `drill_interval`, without superseded rows, and mark
+    /// them current. fsqlite 0.5.1 cannot recreate a virtual table in the transaction that dropped it, so this is
+    /// two transactions: the first marks the indexes stale and drops them. A stop between the two leaves them
+    /// stale and empty, which queries refuse and this repairs.
     ///
     /// # Errors
-    /// [`DrillStoreError::Sql`] if the engine fails; the index is then as it was.
-    pub fn rebuild_spatial_index(&mut self) -> Result<(), DrillStoreError> {
+    /// [`DrillStoreError::Sql`] if the engine fails.
+    pub fn rebuild_indexes(&mut self) -> Result<(), DrillStoreError> {
         self.in_transaction(|s| {
-            s.exec("clear the spatial index", "DELETE FROM drill_interval_box", params![])?;
+            s.set_indexes("stale")?;
             s.exec(
-                "load the spatial index",
-                "INSERT INTO drill_interval_box SELECT rid, min_e, max_e, min_n, max_n, min_z, max_z \
-                 FROM drill_interval WHERE min_e IS NOT NULL",
+                "drop the spatial index",
+                "DROP TABLE IF EXISTS drill_interval_box",
                 params![],
             )?;
-            s.set_spatial_index("current")
+            s.exec(
+                "drop the text index",
+                "DROP TABLE IF EXISTS drill_interval_text",
+                params![],
+            )
+            .map(|_| ())
+        })?;
+        self.in_transaction(|s| {
+            s.exec("create the spatial index", CREATE_BOX_INDEX, params![])?;
+            s.exec("create the text index", CREATE_TEXT_INDEX, params![])?;
+            s.exec(
+                "load the spatial index",
+                "INSERT INTO drill_interval_box SELECT bid, min_e, max_e, min_n, max_n, min_z, max_z \
+                 FROM drill_interval WHERE bid IS NOT NULL",
+                params![],
+            )?;
+            s.exec(
+                "load the text index",
+                "INSERT INTO drill_interval_text(rowid, body) SELECT tid, body FROM drill_interval",
+                params![],
+            )?;
+            s.counters.stale_boxes = 0;
+            s.counters.stale_texts = 0;
+            s.write_counters()?;
+            s.set_indexes("current")
         })
     }
 
     /// The intervals whose box meets `query` in `crs`, sorted by cell and interval id.
     ///
     /// # Errors
-    /// [`DrillStoreError::SpatialIndexStale`] while the index is deferred; [`DrillStoreError::Sql`] if the engine
-    /// fails.
+    /// [`DrillStoreError::IndexStale`] while the indexes are stale; [`DrillStoreError::Sql`] if the engine fails.
     pub fn bbox(&self, crs: &str, query: &Box3) -> Result<Vec<IntervalRef>, DrillStoreError> {
-        if !self.spatial_index_is_current()? {
-            return Err(DrillStoreError::SpatialIndexStale);
+        if !self.indexes_are_current()? {
+            return Err(DrillStoreError::IndexStale);
         }
         let (lo, hi) = (query.min(), query.max());
         let mut st = self
@@ -404,35 +562,29 @@ impl DrillStore {
             .map_err(sql("read the spatial index"))?;
         let mut look = self
             .conn
-            .prepare_cached(
-                "SELECT cell_id, interval_id, hole_id, crs, min_e, max_e, min_n, max_n, min_z, max_z \
-                 FROM drill_interval WHERE rid = ?1",
-            )
+            .prepare_cached(&format!(
+                "SELECT cell_id, interval_id, hole_id, {PRIOR_COLUMNS} FROM drill_interval WHERE bid = ?1"
+            ))
             .map_err(sql("prepare the box refinement"))?;
         let mut out = Vec::new();
-        for rid in candidates {
-            let row = look
-                .query_row(params![rid], |r| {
-                    Ok((
-                        IntervalRef {
-                            cell_id: r.get(0)?,
-                            interval_id: r.get(1)?,
-                            hole_id: r.get(2)?,
-                        },
-                        r.get::<_, Option<String>>(3)?,
-                        [r.get::<_, Option<f64>>(4)?, r.get(6)?, r.get(8)?],
-                        [r.get::<_, Option<f64>>(5)?, r.get(7)?, r.get(9)?],
-                    ))
-                })
-                .map_err(sql("refine a box candidate"))?;
-            let (at, row_crs, min, max) = row;
-            let exact = match (min, max) {
-                ([Some(a), Some(b), Some(c)], [Some(x), Some(y), Some(z)]) => {
-                    Box3::new([a, b, c], [x, y, z])
-                }
-                _ => None,
-            };
-            if row_crs.as_deref() == Some(crs) && exact.is_some_and(|b| b.meets(query)) {
+        for bid in candidates {
+            let row = optional(look.query_row(params![bid], |r| {
+                Ok((
+                    IntervalRef {
+                        cell_id: r.get(0)?,
+                        interval_id: r.get(1)?,
+                        hole_id: r.get(2)?,
+                    },
+                    read_prior(r, 3)?,
+                ))
+            }))
+            .map_err(sql("refine a box candidate"))?;
+            // No row: a superseded box.
+            if let Some((at, prior)) = row
+                && prior
+                    .located
+                    .is_some_and(|(c, b)| c == crs && b.meets(query))
+            {
                 out.push(at);
             }
         }
@@ -443,15 +595,19 @@ impl DrillStore {
     /// The intervals whose logging text matches the FTS5 query `query`, sorted by cell and interval id.
     ///
     /// # Errors
-    /// [`DrillStoreError::Sql`] for a query FTS5 cannot parse, or if the engine fails.
+    /// [`DrillStoreError::IndexStale`] while the indexes are stale; [`DrillStoreError::Sql`] for a query FTS5
+    /// cannot parse, or if the engine fails.
     pub fn text(&self, query: &str) -> Result<Vec<IntervalRef>, DrillStoreError> {
+        if !self.indexes_are_current()? {
+            return Err(DrillStoreError::IndexStale);
+        }
         let mut st = self
             .conn
             .prepare_cached(
                 "SELECT rowid FROM drill_interval_text WHERE drill_interval_text MATCH ?1",
             )
             .map_err(sql("prepare the text query"))?;
-        let rids = st
+        let tids = st
             .query_map(params![query], |r| r.get::<_, i64>(0))
             .map_err(sql("query the text index"))?
             .collect::<Result<Vec<i64>, _>>()
@@ -459,19 +615,20 @@ impl DrillStore {
         let mut look = self
             .conn
             .prepare_cached(
-                "SELECT cell_id, interval_id, hole_id FROM drill_interval WHERE rid = ?1",
+                "SELECT cell_id, interval_id, hole_id FROM drill_interval WHERE tid = ?1",
             )
             .map_err(sql("prepare the text lookup"))?;
-        let mut out = Vec::with_capacity(rids.len());
-        for rid in rids {
-            out.push(
-                look.query_row(params![rid], |r| {
+        let mut out = Vec::with_capacity(tids.len());
+        for tid in tids {
+            // No row: a superseded text.
+            out.extend(
+                optional(look.query_row(params![tid], |r| {
                     Ok(IntervalRef {
                         cell_id: r.get(0)?,
                         interval_id: r.get(1)?,
                         hole_id: r.get(2)?,
                     })
-                })
+                }))
                 .map_err(sql("look up a text match"))?,
             );
         }
@@ -537,10 +694,9 @@ impl DrillStore {
     pub fn intervals(&self) -> Result<Vec<IntervalRow>, DrillStoreError> {
         let mut st = self
             .conn
-            .prepare_cached(
-                "SELECT cell_id, interval_id, hole_id, from_mm, to_mm, body, crs, min_e, max_e, min_n, max_n, \
-                 min_z, max_z FROM drill_interval",
-            )
+            .prepare_cached(&format!(
+                "SELECT cell_id, interval_id, hole_id, from_mm, to_mm, body, {PRIOR_COLUMNS} FROM drill_interval"
+            ))
             .map_err(sql("prepare the interval listing"))?;
         let rows = st
             .query_map(params![], |r| {
@@ -553,28 +709,20 @@ impl DrillStore {
                     r.get::<_, i64>(3)?,
                     r.get::<_, i64>(4)?,
                     r.get::<_, String>(5)?,
-                    r.get::<_, Option<String>>(6)?,
-                    [r.get::<_, Option<f64>>(7)?, r.get(9)?, r.get(11)?],
-                    [r.get::<_, Option<f64>>(8)?, r.get(10)?, r.get(12)?],
+                    read_prior(r, 6)?,
                 ))
             })
             .map_err(sql("list the intervals"))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(sql("read the interval listing"))?;
         let mut out = Vec::with_capacity(rows.len());
-        for (at, from, to, body, crs, min, max) in rows {
-            let located = match (crs, min, max) {
-                (Some(crs), [Some(a), Some(b), Some(c)], [Some(x), Some(y), Some(z)]) => {
-                    Box3::new([a, b, c], [x, y, z]).map(|b| (crs, b))
-                }
-                _ => None,
-            };
+        for (at, from, to, body, prior) in rows {
             out.push(IntervalRow {
                 at,
                 from_mm: nat("from_mm", from)?,
                 to_mm: nat("to_mm", to)?,
                 body,
-                located,
+                located: prior.located,
             });
         }
         out.sort_by(|a, b| a.at.cmp(&b.at));
@@ -605,7 +753,7 @@ impl DrillStore {
         Ok(out)
     }
 
-    /// A test's crash point: after this many writes of the next apply, the process aborts.
+    /// A test's crash point: after this many writes of what comes next, the process aborts.
     #[cfg(test)]
     pub(crate) fn crash_after(&self, writes: Option<u64>) {
         self.steps.set(0);
@@ -634,7 +782,7 @@ impl DrillStore {
         &self,
         what: &'static str,
         sql_text: &str,
-        args: impl fsqlite::blocking::Params,
+        args: impl Params,
     ) -> Result<usize, DrillStoreError> {
         let n = self.conn.execute(sql_text, args).map_err(sql(what))?;
         self.step();
@@ -645,7 +793,7 @@ impl DrillStore {
         &self,
         what: &'static str,
         sql_text: &str,
-        args: impl fsqlite::blocking::Params,
+        args: impl Params,
     ) -> Result<usize, DrillStoreError> {
         let n = self
             .conn
@@ -663,7 +811,7 @@ impl DrillStore {
     ) -> Result<(), DrillStoreError> {
         self.conn.execute_batch("BEGIN").map_err(sql("begin"))?;
         self.step();
-        let next_rid = self.next_rid;
+        let counters = self.counters;
         let done =
             body(self).and_then(|()| self.conn.execute_batch("COMMIT").map_err(sql("commit")));
         match done {
@@ -672,7 +820,7 @@ impl DrillStore {
                 Ok(())
             }
             Err(e) => {
-                self.next_rid = next_rid;
+                self.counters = counters;
                 match self.conn.execute_batch("ROLLBACK") {
                     Ok(()) => Err(e),
                     Err(r) => Err(DrillStoreError::Sql {
@@ -684,11 +832,22 @@ impl DrillStore {
         }
     }
 
-    fn set_spatial_index(&self, state: &str) -> Result<(), DrillStoreError> {
+    fn set_indexes(&self, state: &str) -> Result<(), DrillStoreError> {
         self.exec_cached(
-            "record the spatial index state",
-            "UPDATE projection_meta SET value = ?1 WHERE key = 'spatial_index'",
+            "record the index state",
+            "UPDATE projection_meta SET value = ?1 WHERE key = 'indexes'",
             params![state],
+        )
+        .map(|_| ())
+    }
+
+    fn write_counters(&self) -> Result<(), DrillStoreError> {
+        let c = self.counters;
+        self.exec_cached(
+            "record the counters",
+            "INSERT INTO projection_counter(key, value) VALUES ('next_bid', ?1), ('next_tid', ?2), \
+             ('stale_boxes', ?3), ('stale_texts', ?4) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![c.next_bid, c.next_tid, c.stale_boxes, c.stale_texts],
         )
         .map(|_| ())
     }
@@ -744,19 +903,23 @@ impl DrillStore {
         Ok(prior.and_then(|(_, h)| h))
     }
 
-    /// Write `iv`'s row (not its box); returns its row id and whether it had one before.
-    fn upsert_interval(
-        &mut self,
-        cell: &str,
-        iv: &Interval,
-    ) -> Result<(i64, bool), DrillStoreError> {
+    /// Write `iv`'s row (not its box).
+    fn upsert_interval(&mut self, cell: &str, iv: &Interval) -> Result<Upserted, DrillStoreError> {
         let prior = optional(
             self.conn
-                .prepare_cached(
-                    "SELECT rid FROM drill_interval WHERE cell_id = ?1 AND interval_id = ?2",
-                )
+                .prepare_cached(&format!(
+                    "SELECT rid, tid, body, {PRIOR_COLUMNS} FROM drill_interval \
+                     WHERE cell_id = ?1 AND interval_id = ?2"
+                ))
                 .and_then(|mut st| {
-                    st.query_row(params![cell, iv.interval_id], |r| r.get::<_, i64>(0))
+                    st.query_row(params![cell, iv.interval_id], |r| {
+                        Ok((
+                            r.get::<_, i64>(0)?,
+                            r.get::<_, i64>(1)?,
+                            r.get::<_, String>(2)?,
+                            read_prior(r, 3)?,
+                        ))
+                    })
                 }),
         )
         .map_err(sql("read an interval's row"))?;
@@ -765,23 +928,41 @@ impl DrillStore {
             int("to_mm", iv.to_mm)?,
             body(iv),
         );
-        if let Some(rid) = prior {
+        if let Some((rid, tid, old_text, prior)) = prior {
+            let (tid, new_text) = if old_text == text {
+                (tid, None)
+            } else {
+                let tid = self.counters.next_tid;
+                self.counters.next_tid += 1;
+                self.counters.stale_texts += 1;
+                (tid, Some((tid, text.clone())))
+            };
             self.exec_cached(
                 "supersede an interval",
-                "UPDATE drill_interval SET hole_id = ?1, from_mm = ?2, to_mm = ?3, body = ?4 WHERE rid = ?5",
-                params![iv.hole_id, from, to, text, rid],
+                "UPDATE drill_interval SET hole_id = ?1, from_mm = ?2, to_mm = ?3, body = ?4, tid = ?5 \
+                 WHERE rid = ?6",
+                params![iv.hole_id, from, to, text, tid, rid],
             )?;
-            return Ok((rid, true));
+            return Ok(Upserted {
+                rid,
+                prior: Some(prior),
+                text: new_text,
+            });
         }
-        let rid = self.next_rid;
+        let (rid, tid) = (self.counters.next_rid, self.counters.next_tid);
         self.exec_cached(
             "insert an interval",
-            "INSERT INTO drill_interval(rid, cell_id, interval_id, hole_id, from_mm, to_mm, body) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![rid, cell, iv.interval_id, iv.hole_id, from, to, text],
+            "INSERT INTO drill_interval(rid, cell_id, interval_id, hole_id, from_mm, to_mm, body, tid) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![rid, cell, iv.interval_id, iv.hole_id, from, to, text, tid],
         )?;
-        self.next_rid += 1;
-        Ok((rid, false))
+        self.counters.next_rid += 1;
+        self.counters.next_tid += 1;
+        Ok(Upserted {
+            rid,
+            prior: None,
+            text: Some((tid, text)),
+        })
     }
 
     /// The trace of `hole` from its current collar and surveys, or why it has none.
@@ -833,7 +1014,7 @@ impl DrillStore {
         let seq = int("batch seq", batch.seq)?;
         let mut dirty_holes = BTreeSet::new();
         let mut spans: BTreeMap<i64, Span> = BTreeMap::new();
-        let mut texts: BTreeMap<i64, (String, bool)> = BTreeMap::new();
+        let mut texts: Vec<(i64, String)> = Vec::new();
         for op in &batch.deltas {
             if !op.key.starts_with(KEY_PREFIX) {
                 continue;
@@ -883,43 +1064,42 @@ impl DrillStore {
                     dirty_holes.extend(prior_hole);
                 }
                 DrillRecord::Interval(iv) => {
-                    let (rid, existed) = self.upsert_interval(cell, iv)?;
+                    let Upserted { rid, prior, text } = self.upsert_interval(cell, iv)?;
                     spans.insert(
                         rid,
                         Span {
                             hole_id: iv.hole_id.clone(),
                             from_mm: iv.from_mm,
                             to_mm: iv.to_mm,
-                            existed,
+                            prior,
                         },
                     );
-                    texts.insert(rid, (body(iv), existed));
+                    texts.extend(text);
                 }
                 _ => {}
             }
         }
         for hole in &dirty_holes {
-            for (rid, from, to) in self.hole_intervals(cell, hole)? {
+            for (rid, from_mm, to_mm, prior) in self.hole_intervals(cell, hole)? {
                 spans.entry(rid).or_insert(Span {
                     hole_id: hole.clone(),
-                    from_mm: from,
-                    to_mm: to,
-                    existed: true,
+                    from_mm,
+                    to_mm,
+                    prior: Some(prior),
                 });
             }
         }
         let boxes = self.locate(cell, &dirty_holes, &spans)?;
-        if self.defer_index || !self.spatial_index_is_current()? {
-            self.set_spatial_index("stale")?;
-        } else {
-            let replaced: Vec<i64> = spans
-                .iter()
-                .filter(|(_, s)| s.existed)
-                .map(|(rid, _)| *rid)
-                .collect();
-            self.write_rtree(&replaced, &boxes)?;
+        let current = self.indexes_are_current()?;
+        if self.defer {
+            if current {
+                self.set_indexes("stale")?;
+            }
+        } else if current {
+            self.write_rtree(&boxes)?;
+            self.write_text(&texts)?;
         }
-        self.write_text(&texts)?;
+        self.write_counters()?;
         self.exec_cached(
             "record the mark",
             "INSERT INTO projection_mark(cell_id, applied, head) VALUES (?1, ?2, ?3) \
@@ -929,30 +1109,40 @@ impl DrillStore {
         Ok(())
     }
 
-    /// Row id, from and to of every interval on `hole`.
+    /// Row id, from, to and box of every interval on `hole`.
     fn hole_intervals(
         &self,
         cell: &str,
         hole: &str,
-    ) -> Result<Vec<(i64, u64, u64)>, DrillStoreError> {
+    ) -> Result<Vec<(i64, u64, u64, Prior)>, DrillStoreError> {
         let rows = self
             .conn
-            .prepare_cached("SELECT rid, from_mm, to_mm FROM drill_interval WHERE cell_id = ?1 AND hole_id = ?2")
+            .prepare_cached(&format!(
+                "SELECT rid, from_mm, to_mm, {PRIOR_COLUMNS} FROM drill_interval WHERE cell_id = ?1 AND hole_id = ?2"
+            ))
             .and_then(|mut st| {
                 st.query_map(params![cell, hole], |r| {
-                    Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, i64>(2)?,
+                        read_prior(r, 3)?,
+                    ))
                 })?
                 .collect::<Result<Vec<_>, _>>()
             })
             .map_err(sql("read a hole's intervals"))?;
         rows.into_iter()
-            .map(|(rid, from, to)| Ok((rid, nat("from_mm", from)?, nat("to_mm", to)?)))
+            .map(|(rid, from, to, prior)| {
+                Ok((rid, nat("from_mm", from)?, nat("to_mm", to)?, prior))
+            })
             .collect()
     }
 
-    /// Compute and write the boxes of `spans` and the trace status of their holes; returns the located boxes.
+    /// Compute the boxes of `spans`, write the ones that changed and the trace status of their holes; returns the
+    /// new boxes with their new R-tree ids.
     fn locate(
-        &self,
+        &mut self,
         cell: &str,
         dirty_holes: &BTreeSet<String>,
         spans: &BTreeMap<i64, Span>,
@@ -975,50 +1165,67 @@ impl DrillStore {
         }
         let mut boxes = Vec::new();
         for (rid, span) in spans {
-            let located = traces
+            let now = traces
                 .get(span.hole_id.as_str())
                 .and_then(|t| t.as_ref().ok())
-                .map(|t| (t.crs(), interval_box(t, span.from_mm, span.to_mm)));
-            let (crs, lo, hi) = match &located {
-                Some((crs, b)) => (Some(*crs), Some(b.min()), Some(b.max())),
+                .map(|t| {
+                    (
+                        t.crs().to_string(),
+                        interval_box(t, span.from_mm, span.to_mm),
+                    )
+                });
+            let before = span.prior.as_ref().and_then(|p| p.located.clone());
+            // Unchanged, or new with no box: nothing to write.
+            if (span.prior.is_some() && before == now) || (span.prior.is_none() && now.is_none()) {
+                continue;
+            }
+            if span.prior.as_ref().is_some_and(|p| p.bid.is_some()) {
+                self.counters.stale_boxes += 1;
+            }
+            let bid = now.as_ref().map(|_| {
+                let bid = self.counters.next_bid;
+                self.counters.next_bid += 1;
+                bid
+            });
+            let (crs, lo, hi) = match &now {
+                Some((crs, b)) => (Some(crs.as_str()), Some(b.min()), Some(b.max())),
                 None => (None, None, None),
             };
             let at = |c: Option<[f64; 3]>, k: usize| c.map(|v| v[k]);
             self.exec_cached(
                 "write an interval's box",
-                "UPDATE drill_interval SET crs = ?1, min_e = ?2, max_e = ?3, min_n = ?4, max_n = ?5, \
-                 min_z = ?6, max_z = ?7 WHERE rid = ?8",
-                params![crs, at(lo, 0), at(hi, 0), at(lo, 1), at(hi, 1), at(lo, 2), at(hi, 2), rid],
+                "UPDATE drill_interval SET bid = ?1, crs = ?2, min_e = ?3, max_e = ?4, min_n = ?5, max_n = ?6, \
+                 min_z = ?7, max_z = ?8 WHERE rid = ?9",
+                params![
+                    bid,
+                    crs,
+                    at(lo, 0),
+                    at(hi, 0),
+                    at(lo, 1),
+                    at(hi, 1),
+                    at(lo, 2),
+                    at(hi, 2),
+                    rid
+                ],
             )?;
-            if let Some((_, b)) = located {
-                boxes.push((*rid, b));
+            if let (Some(bid), Some((_, b))) = (bid, now) {
+                boxes.push((bid, b));
             }
         }
         Ok(boxes)
     }
 
-    /// Replace the R-tree rows of `replaced` with `boxes`, a few statements at a time.
-    fn write_rtree(&self, replaced: &[i64], boxes: &[(i64, Box3)]) -> Result<(), DrillStoreError> {
-        for chunk in replaced.chunks(RTREE_ROWS_PER_STATEMENT) {
-            let ids: Vec<String> = chunk.iter().map(i64::to_string).collect();
-            self.exec(
-                "remove boxes from the spatial index",
-                &format!(
-                    "DELETE FROM drill_interval_box WHERE id IN ({})",
-                    ids.join(", ")
-                ),
-                params![],
-            )?;
-        }
+    /// Add `boxes` to the R-tree, a few statements at a time.
+    fn write_rtree(&self, boxes: &[(i64, Box3)]) -> Result<(), DrillStoreError> {
         for chunk in boxes.chunks(RTREE_ROWS_PER_STATEMENT) {
             let mut text = String::from("INSERT INTO drill_interval_box VALUES ");
-            for (i, (rid, b)) in chunk.iter().enumerate() {
+            for (i, (bid, b)) in chunk.iter().enumerate() {
                 let (lo, hi) = (b.min(), b.max());
                 let sep = if i == 0 { "" } else { ", " };
                 // Display of a finite f64 is its shortest round-trip decimal, never an exponent.
                 let _ = write!(
                     text,
-                    "{sep}({rid}, {}, {}, {}, {}, {}, {})",
+                    "{sep}({bid}, {}, {}, {}, {}, {}, {})",
                     lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]
                 );
             }
@@ -1027,35 +1234,16 @@ impl DrillStore {
         Ok(())
     }
 
-    /// Replace the FTS5 rows of `texts`: delete the ones that existed, then insert all.
-    fn write_text(&self, texts: &BTreeMap<i64, (String, bool)>) -> Result<(), DrillStoreError> {
-        let existed: Vec<String> = texts
-            .iter()
-            .filter(|(_, (_, e))| *e)
-            .map(|(rid, _)| rid.to_string())
-            .collect();
-        for chunk in existed.chunks(RTREE_ROWS_PER_STATEMENT) {
-            self.exec(
-                "remove text from the text index",
-                &format!(
-                    "DELETE FROM drill_interval_text WHERE rowid IN ({})",
-                    chunk.join(", ")
-                ),
-                params![],
-            )?;
-        }
-        let rows: Vec<(i64, &str)> = texts
-            .iter()
-            .map(|(rid, (t, _))| (*rid, t.as_str()))
-            .collect();
-        for chunk in rows.chunks(TEXT_ROWS_PER_STATEMENT) {
+    /// Add `texts` to the text index, a few hundred rows a statement.
+    fn write_text(&self, texts: &[(i64, String)]) -> Result<(), DrillStoreError> {
+        for chunk in texts.chunks(TEXT_ROWS_PER_STATEMENT) {
             let mut text = String::from("INSERT INTO drill_interval_text(rowid, body) VALUES ");
             let mut args: Vec<&dyn ToSql> = Vec::with_capacity(chunk.len() * 2);
-            for (i, (rid, body)) in chunk.iter().enumerate() {
+            for (i, (tid, body)) in chunk.iter().enumerate() {
                 // fsqlite 0.5.1 takes numbered placeholders only; a bare `?` is an internal error.
                 let sep = if i == 0 { "" } else { ", " };
                 let _ = write!(text, "{sep}(?{}, ?{})", 2 * i + 1, 2 * i + 2);
-                args.push(rid);
+                args.push(tid);
                 args.push(body);
             }
             self.exec("add text to the text index", &text, args.as_slice())?;

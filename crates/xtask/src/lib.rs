@@ -1666,7 +1666,9 @@ mod tests {
         // BD-188 adds the portable acQuire compositing adapter.
         // Corebox QA/QC adds eight modules: lib, censored, crm, duplicates, error, insertion, monitors and stats.
         // The operator CRM workflow adds fmine-drill::qaqc and the fmine-cli drill_qaqc adapter.
-        assert_eq!(report.bitwise_files, 168, "{report:?}");
+        // bd-149 adds fmine-recon's error and stats modules.
+        // BD-121 adds the interval box bound (fmine-projection::drill::boxes).
+        assert_eq!(report.bitwise_files, 171, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.

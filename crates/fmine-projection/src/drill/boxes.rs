@@ -1,8 +1,9 @@
 //! The 3-D box that covers a logging interval's desurveyed trace (`BD-121`).
 //!
-//! Boxes are axis-aligned in the hole's CRS: east, north and up, in metres. They use only IEEE-754 addition,
-//! subtraction, multiplication, division and square roots over `fmine_drill::desurvey` points, so they are
-//! bit-identical wherever the trace is.
+//! Determinism: BitwisePortable (IEEE-754 addition, subtraction, multiplication, division and square roots).
+//!
+//! Boxes are axis-aligned in the hole's CRS: east, north and up, in metres, and bit-identical wherever the
+//! `fmine_drill::desurvey` trace is.
 
 use std::f64::consts::PI;
 

@@ -242,7 +242,14 @@ pub(crate) fn cargo_tree(root: &Path, platform: &str, args: &[&str]) -> Result<S
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let out = Command::new(cargo)
         .current_dir(root)
-        .args(["tree", "--locked", "-e", "normal,build", "--target", platform])
+        .args([
+            "tree",
+            "--locked",
+            "-e",
+            "normal,build",
+            "--target",
+            platform,
+        ])
         .args(["--prefix", "depth", "--format", "{p}"])
         .args(args)
         .output()
@@ -474,10 +481,14 @@ mod tests {
     fn test_workspace_closures_pass_on_every_target() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let closures = production_closures(&root).expect("cargo tree");
-        let pin = pinned_rev(&fs::read_to_string(root.join("franken-stack.lock")).unwrap()).unwrap();
+        let pin =
+            pinned_rev(&fs::read_to_string(root.join("franken-stack.lock")).unwrap()).unwrap();
         for platform in CLOSURE_TARGETS {
             let name = format!("workspace ({platform})");
-            let (_, tree) = closures.iter().find(|(n, _)| *n == name).expect("workspace closure");
+            let (_, tree) = closures
+                .iter()
+                .find(|(n, _)| *n == name)
+                .expect("workspace closure");
             let packages: Vec<TreeLine> = tree.lines().filter_map(parse_tree_line).collect();
             assert!(
                 packages
@@ -497,12 +508,18 @@ mod tests {
                 assert!(runtimes.is_empty(), "{name}: {runtimes:?}");
             } else {
                 assert_eq!(runtimes.len(), 1, "{name}: {runtimes:?}");
-                assert!(runtimes.iter().all(|s| s.contains(&format!("rev={pin}"))), "{name}: {runtimes:?}");
+                assert!(
+                    runtimes.iter().all(|s| s.contains(&format!("rev={pin}"))),
+                    "{name}: {runtimes:?}"
+                );
             }
         }
         let (report, lock) = check_int_as_001a(&root).expect("closure checks");
         assert!(report.present);
-        assert_eq!(report.status_line(&lock), format!("INT-AS-001a: checks PASS at {lock}"));
+        assert_eq!(
+            report.status_line(&lock),
+            format!("INT-AS-001a: checks PASS at {lock}")
+        );
         assert_eq!(lock.len(), 64);
         for r in &report.rows {
             println!("{}", r.log_line());

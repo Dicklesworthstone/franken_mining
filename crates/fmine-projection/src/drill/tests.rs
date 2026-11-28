@@ -392,18 +392,35 @@ fn rtree_rows(store: &DrillStore) -> BTreeMap<i64, [f64; 6]> {
     .unwrap()
 }
 
-fn rid_of(store: &DrillStore, interval_id: &str) -> i64 {
+/// The interval's current R-tree id (`None` without a box) and text id.
+fn ids_of(store: &DrillStore, interval_id: &str) -> (Option<i64>, i64) {
     store
         .conn
         .query_row(
-            "SELECT rid FROM drill_interval WHERE cell_id = ?1 AND interval_id = ?2",
+            "SELECT bid, tid FROM drill_interval WHERE cell_id = ?1 AND interval_id = ?2",
             params![CELL, interval_id],
-            |r| r.get::<_, i64>(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap()
 }
 
-/// The store holds exactly `want`, and its R-tree holds a row covering each located box and no other row.
+/// The text index's rows: rowid and body.
+fn text_rows(store: &DrillStore) -> BTreeMap<i64, String> {
+    let mut st = store
+        .conn
+        .prepare("SELECT rowid, body FROM drill_interval_text")
+        .unwrap();
+    st.query_map(params![], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+    })
+    .unwrap()
+    .collect::<Result<BTreeMap<_, _>, _>>()
+    .unwrap()
+}
+
+/// The store holds exactly `want`. While its indexes are current, the R-tree holds a row covering each located
+/// box under the interval's current R-tree id, the text index holds each interval's text under its current text
+/// id, and every other index row is counted as garbage.
 fn assert_holds(store: &DrillStore, want: &Expected, context: &str) {
     let keys = store.record_keys().unwrap();
     assert_eq!(
@@ -428,38 +445,57 @@ fn assert_holds(store: &DrillStore, want: &Expected, context: &str) {
         want.unlocated,
         "{context}: unlocated holes"
     );
-    if store.spatial_index_is_current().unwrap() {
-        let rows = rtree_rows(store);
-        let mut located = 0;
-        for iv in &want.intervals {
-            let rid = rid_of(store, &iv.at.interval_id);
-            let Some((_, b)) = &iv.located else {
-                assert!(
-                    !rows.contains_key(&rid),
-                    "{context}: unlocated {} in the R-tree",
-                    iv.at.interval_id
-                );
-                continue;
-            };
-            located += 1;
-            let r = rows
-                .get(&rid)
-                .unwrap_or_else(|| panic!("{context}: {} not in the R-tree", iv.at.interval_id));
-            let (lo, hi) = (b.min(), b.max());
-            for k in 0..3 {
-                assert!(
-                    r[2 * k] <= lo[k] && hi[k] <= r[2 * k + 1],
-                    "{context}: {} R-tree row {r:?} inside {b:?}",
-                    iv.at.interval_id
-                );
-                assert!(
-                    lo[k] - r[2 * k] < 1.0 && r[2 * k + 1] - hi[k] < 1.0,
-                    "{context}: R-tree row {r:?} far from {b:?}"
-                );
-            }
-        }
-        assert_eq!(rows.len(), located, "{context}: R-tree rows");
+    if !store.indexes_are_current().unwrap() {
+        return;
     }
+    let (boxes, texts) = (rtree_rows(store), text_rows(store));
+    let garbage = store.index_garbage();
+    let mut located = 0;
+    for iv in &want.intervals {
+        let (bid, tid) = ids_of(store, &iv.at.interval_id);
+        assert_eq!(
+            texts.get(&tid),
+            Some(&iv.body),
+            "{context}: text of {}",
+            iv.at.interval_id
+        );
+        let Some((_, b)) = &iv.located else {
+            assert_eq!(
+                bid, None,
+                "{context}: unlocated {} has an R-tree id",
+                iv.at.interval_id
+            );
+            continue;
+        };
+        located += 1;
+        let bid =
+            bid.unwrap_or_else(|| panic!("{context}: {} has no R-tree id", iv.at.interval_id));
+        let r = boxes
+            .get(&bid)
+            .unwrap_or_else(|| panic!("{context}: {} not in the R-tree", iv.at.interval_id));
+        let (lo, hi) = (b.min(), b.max());
+        for k in 0..3 {
+            assert!(
+                r[2 * k] <= lo[k] && hi[k] <= r[2 * k + 1],
+                "{context}: {} R-tree row {r:?} inside {b:?}",
+                iv.at.interval_id
+            );
+            assert!(
+                lo[k] - r[2 * k] < 1.0 && r[2 * k + 1] - hi[k] < 1.0,
+                "{context}: R-tree row {r:?} far from {b:?}"
+            );
+        }
+    }
+    assert_eq!(
+        boxes.len() as u64,
+        located + garbage.stale_boxes,
+        "{context}: R-tree rows"
+    );
+    assert_eq!(
+        texts.len() as u64,
+        want.intervals.len() as u64 + garbage.stale_texts,
+        "{context}: text rows"
+    );
 }
 
 /// Query boxes around the campaign: random ones, and for each located interval its own box and its upper corner
@@ -617,8 +653,28 @@ fn test_the_store_matches_the_reference_after_every_batch() {
     );
 }
 
-/// A rebuild that defers the R-tree and loads it once ends where batch-by-batch feeding ends (criterion 5), and
-/// keeps up batch by batch after that. While deferred, bbox refuses.
+/// The index rows that answer: the R-tree rows under current R-tree ids, the text rows under current text ids.
+fn live_index_rows(store: &DrillStore) -> (BTreeMap<i64, [f64; 6]>, BTreeMap<i64, String>) {
+    let mut st = store
+        .conn
+        .prepare("SELECT bid, tid FROM drill_interval")
+        .unwrap();
+    let ids = st
+        .query_map(params![], |r| {
+            Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, i64>(1)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let mut boxes = rtree_rows(store);
+    let mut texts = text_rows(store);
+    boxes.retain(|bid, _| ids.iter().any(|(b, _)| *b == Some(*bid)));
+    texts.retain(|tid, _| ids.iter().any(|(_, t)| t == tid));
+    (boxes, texts)
+}
+
+/// A rebuild that defers the indexes and loads them once ends where batch-by-batch feeding ends (criterion 5),
+/// and keeps up batch by batch after that. While deferred, bbox and text refuse with `FMINE-REF-502`.
 #[test]
 fn test_a_deferred_rebuild_equals_the_incremental_store() {
     let campaign = Campaign::new(7, 30);
@@ -627,17 +683,22 @@ fn test_a_deferred_rebuild_equals_the_incremental_store() {
     incremental.catch_up(batches).unwrap();
 
     let mut store = DrillStore::open_in_memory().unwrap();
-    store.defer_spatial_index(true);
+    store.defer_indexes(true);
     let mut rebuilt = Projection::open(store).unwrap();
     rebuilt.catch_up(&batches[..20]).unwrap();
     let any = Box3::new([0.0; 3], [1e7; 3]).unwrap();
     let refused = rebuilt.projector().bbox(CRS, &any).unwrap_err();
-    assert_eq!(refused, DrillStoreError::SpatialIndexStale);
+    assert_eq!(refused, DrillStoreError::IndexStale);
     assert_eq!(refused.to_refusal().code, "FMINE-REF-502");
-    assert!(!rebuilt.projector().spatial_index_is_current().unwrap());
+    assert_eq!(
+        rebuilt.projector().text("schist").unwrap_err(),
+        DrillStoreError::IndexStale
+    );
+    assert!(!rebuilt.projector().indexes_are_current().unwrap());
     let mut store = rebuilt.into_projector();
-    store.rebuild_spatial_index().unwrap();
-    store.defer_spatial_index(false);
+    store.rebuild_indexes().unwrap();
+    store.defer_indexes(false);
+    assert_eq!(store.index_garbage(), IndexGarbage::default());
     let mut rebuilt = Projection::open(store).unwrap();
     assert_holds(
         rebuilt.projector(),
@@ -650,10 +711,100 @@ fn test_a_deferred_rebuild_equals_the_incremental_store() {
     let (a, b) = (incremental.projector(), rebuilt.projector());
     assert_holds(a, &want, "incremental");
     assert_holds(b, &want, "rebuilt then fed");
-    assert_eq!(rtree_rows(a), rtree_rows(b));
+    assert_eq!(live_index_rows(a), live_index_rows(b));
     assert_eq!(a.stored_marks().unwrap(), b.stored_marks().unwrap());
     let qs = queries(&want, &mut Rng(70));
     assert_bbox_answers(b, &want, &qs, "rebuilt then fed");
+    assert_text_answers(b, &want, "rebuilt then fed");
+}
+
+/// Supersessions leave index garbage that never answers; `rebuild_indexes` drops it and the answers stay the
+/// same. A relog that changes only text keeps the R-tree row, and a move that keeps the text keeps the text row.
+#[test]
+fn test_rebuilding_the_indexes_drops_their_garbage_and_keeps_every_answer() {
+    let campaign = Campaign::new(17, 40);
+    let mut projection = Projection::open(DrillStore::open_in_memory().unwrap()).unwrap();
+    projection.catch_up(campaign.batches()).unwrap();
+    let want = expected(&campaign.states[40]);
+    let garbage = projection.projector().index_garbage();
+    assert!(
+        garbage.stale_boxes > 10 && garbage.stale_texts > 10,
+        "{garbage:?}"
+    );
+    let qs = queries(&want, &mut Rng(170));
+    let before: Vec<_> = qs
+        .iter()
+        .map(|(crs, q)| projection.projector().bbox(crs, q).unwrap())
+        .collect();
+    let live = live_index_rows(projection.projector());
+    let mut store = projection.into_projector();
+    store.rebuild_indexes().unwrap();
+    assert_eq!(store.index_garbage(), IndexGarbage::default());
+    assert_holds(&store, &want, "compacted");
+    assert_eq!(live_index_rows(&store), live);
+    let after: Vec<_> = qs
+        .iter()
+        .map(|(crs, q)| store.bbox(crs, q).unwrap())
+        .collect();
+    assert_eq!(after, before);
+    assert_text_answers(&store, &want, "compacted");
+
+    // Each kind of relog leaves exactly the garbage it should: a text change one text row, a depth change one
+    // box row, a relog that changes neither nothing. The superseded text never answers.
+    let mut rng = Rng(3);
+    let mut ledger = L0Ledger::new();
+    let lease = ledger.create_cell(CELL, "node-1").unwrap();
+    let iv = Interval {
+        lithology: "SCHIST".to_string(),
+        ..interval(0, 0, &mut rng)
+    };
+    commit(
+        &mut ledger,
+        &lease,
+        &[
+            Change::Put(DrillRecord::Collar(collar(0, &mut rng))),
+            Change::Put(DrillRecord::Survey(Survey {
+                depth_mm: 0,
+                ..survey(0, 0, &mut rng)
+            })),
+            Change::Put(DrillRecord::Interval(iv.clone())),
+        ],
+    )
+    .unwrap();
+    let granite = Interval {
+        lithology: "GRANITE".to_string(),
+        ..iv.clone()
+    };
+    let deeper = Interval {
+        from_mm: iv.from_mm + 10_000,
+        to_mm: iv.to_mm + 10_000,
+        ..granite.clone()
+    };
+    for (n, relog) in [granite, deeper.clone(), deeper].into_iter().enumerate() {
+        commit(
+            &mut ledger,
+            &lease,
+            &[Change::Supersede {
+                record: DrillRecord::Interval(relog),
+                reason: format!("relog {n}"),
+            }],
+        )
+        .unwrap();
+    }
+    let mut projection = Projection::open(DrillStore::open_in_memory().unwrap()).unwrap();
+    let mut seen = Vec::new();
+    for batch in ledger.batches(CELL).unwrap() {
+        projection.feed(batch).unwrap();
+        let g = projection.projector().index_garbage();
+        seen.push((g.stale_boxes, g.stale_texts));
+    }
+    assert_eq!(seen, [(0, 0), (0, 1), (1, 1), (1, 1)]);
+    let store = projection.projector();
+    assert!(store.text("schist").unwrap().is_empty());
+    assert_eq!(store.text("granite").unwrap().len(), 1);
+    let rows = store.intervals().unwrap();
+    let (_, b) = rows[0].located.clone().unwrap();
+    assert_eq!(store.bbox(CRS, &b).unwrap().len(), 1);
 }
 
 /// Replaying the ledger to batch `k` gives the projection as of `k` (criterion 7's historical replay).
@@ -709,9 +860,9 @@ const CRASH_ENV: &str = "FMINE_PROJECTION_DRILL_CRASH";
 const CRASH_SEED: u64 = 11;
 const CRASH_BATCHES: usize = 8;
 
-/// The child side of the crash test; without `FMINE_PROJECTION_DRILL_CRASH` it does nothing. With
+/// The child side of the crash tests; without `FMINE_PROJECTION_DRILL_CRASH` it does nothing. With
 /// `<path>;<k>;<n>` it feeds batches `0..k` to the store at `path`, then aborts the process at write `n` of
-/// batch `k`.
+/// batch `k`, or, for `k` = [`CRASH_BATCHES`], at write `n` of `rebuild_indexes`.
 #[test]
 fn test_crash_child_entry_point() {
     let Ok(spec) = std::env::var(CRASH_ENV) else {
@@ -726,11 +877,87 @@ fn test_crash_child_entry_point() {
     let batches = campaign.batches();
     let mut projection = Projection::open(DrillStore::open(path).unwrap()).unwrap();
     projection.catch_up(&batches[..k]).unwrap();
-    projection.projector().crash_after(Some(n));
-    let fed = projection.feed(&batches[k]);
+    if k == CRASH_BATCHES {
+        let mut store = projection.into_projector();
+        store.crash_after(Some(n));
+        let rebuilt = store.rebuild_indexes();
+        eprintln!("no crash at write {n} of the index rebuild: {rebuilt:?}");
+    } else {
+        projection.projector().crash_after(Some(n));
+        let fed = projection.feed(&batches[k]);
+        eprintln!("no crash at write {n} of batch {k}: {fed:?}");
+    }
     // Reaching here means the crash point was never hit.
-    eprintln!("no crash at write {n} of batch {k}: {fed:?}");
     std::process::exit(3);
+}
+
+/// Run the crash child for batch `k` (or the index rebuild) and write `n`; returns the store it left. The child
+/// must die by a signal.
+fn crash_child(k: usize, n: u64) -> PathBuf {
+    let path = scratch("crash");
+    let out = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "drill::tests::test_crash_child_entry_point",
+            "--exact",
+            "--test-threads=1",
+            "--nocapture",
+        ])
+        .env(CRASH_ENV, format!("{};{k};{n}", path.display()))
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success() && out.status.code().is_none(),
+        "batch {k} write {n}: {:?}\n{}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    path
+}
+
+/// A process killed at any write of `rebuild_indexes` leaves the indexes either as they were, or stale (bbox and
+/// text refuse until a rebuild), or rebuilt; never current and wrong. A rebuild after the crash repairs them.
+#[cfg(unix)]
+#[test]
+fn test_a_crash_in_an_index_rebuild_leaves_them_current_or_refusing() {
+    let campaign = Campaign::new(CRASH_SEED, CRASH_BATCHES);
+    let want = expected(&campaign.states[CRASH_BATCHES]);
+    let mut dry = Projection::open(DrillStore::open_in_memory().unwrap()).unwrap();
+    dry.catch_up(campaign.batches()).unwrap();
+    let mut dry = dry.into_projector();
+    dry.crash_after(None);
+    dry.rebuild_indexes().unwrap();
+    let writes = dry.writes();
+    let qs = queries(&want, &mut Rng(110));
+    let mut stale_seen = 0;
+    for n in 1..=writes {
+        let mut store = DrillStore::open(crash_child(CRASH_BATCHES, n)).unwrap();
+        let context = format!("crash at write {n} of {writes} of the index rebuild");
+        assert_holds(&store, &want, &context);
+        if store.indexes_are_current().unwrap() {
+            assert_bbox_answers(&store, &want, &qs, &context);
+            assert_text_answers(&store, &want, &context);
+        } else {
+            stale_seen += 1;
+            assert_eq!(
+                store.bbox(CRS, &qs[0].1).unwrap_err(),
+                DrillStoreError::IndexStale
+            );
+            assert_eq!(
+                store.text("schist").unwrap_err(),
+                DrillStoreError::IndexStale
+            );
+        }
+        if n == writes {
+            assert_eq!(store.index_garbage(), IndexGarbage::default(), "{context}");
+        }
+        store.rebuild_indexes().unwrap();
+        assert_holds(&store, &want, &format!("{context}, rebuilt"));
+        assert_bbox_answers(&store, &want, &qs, &format!("{context}, rebuilt"));
+    }
+    assert!(
+        stale_seen > 0,
+        "no crash point fell between the two transactions"
+    );
 }
 
 /// A process killed at any write of an apply, from `BEGIN` to just after `COMMIT`, leaves the store at the batch
@@ -741,7 +968,6 @@ fn test_crash_child_entry_point() {
 fn test_a_crash_at_any_write_leaves_a_batch_wholly_applied_or_absent() {
     let campaign = Campaign::new(CRASH_SEED, CRASH_BATCHES);
     let batches = campaign.batches();
-    let exe = std::env::current_exe().unwrap();
     let mut crashes = 0;
     for k in 0..CRASH_BATCHES {
         let mut dry = Projection::open(DrillStore::open_in_memory().unwrap()).unwrap();
@@ -751,23 +977,7 @@ fn test_a_crash_at_any_write_leaves_a_batch_wholly_applied_or_absent() {
         let writes = dry.projector().writes();
         assert!(writes >= 4, "batch {k}: {writes} writes");
         for n in 1..=writes {
-            let path = scratch("crash");
-            let out = Command::new(&exe)
-                .args([
-                    "drill::tests::test_crash_child_entry_point",
-                    "--exact",
-                    "--test-threads=1",
-                    "--nocapture",
-                ])
-                .env(CRASH_ENV, format!("{};{k};{n}", path.display()))
-                .output()
-                .unwrap();
-            assert!(
-                !out.status.success() && out.status.code().is_none(),
-                "batch {k} write {n}: {:?}\n{}",
-                out.status,
-                String::from_utf8_lossy(&out.stderr)
-            );
+            let path = crash_child(k, n);
             crashes += 1;
             let store = DrillStore::open(&path).unwrap();
             let applied = store

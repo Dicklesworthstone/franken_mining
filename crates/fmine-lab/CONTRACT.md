@@ -43,14 +43,14 @@ Verification/lab evidence only (Testpit); never production operational measureme
 
 ## 8. Validity domain
 - Models protocol schedules, virtual clocks, fault injection, and `fmine-runtime` capability/supervision state machines deterministically.
-- `asupersync =0.5.0` is not yet in `Cargo.lock` (`INT-AS-001a = NOT_APPLICABLE`); once admitted into `Cargo.lock`, `INT-AS-001b` (`BD-257`) and `BD-337` must re-run criterion 8 against the live `asupersync` executor.
+- `asupersync =0.6.2` is in `Cargo.lock` since `021a58e6`, through `fsqlite` in `fmine-projection` only (`INT-AS-001a = PASS`). This crate does not link it: `INT-AS-001b` (`BD-257`) and `BD-337` must re-run criterion 8 against the live `asupersync` executor.
 
 ## 9. Oracles
 - Seeded known-answer concurrent lease-fencing race (caught deterministically by `DporExplorer` and by `ChaosProfile` crash-at-boundary campaign).
 - `fmine-runtime::region::REGIONS` (itself verified against plan §26.6) for `PO-BED-8`.
 
 ## 10. Known gaps
-- `asupersync` native `LabRuntime` adapter awaits `asupersync =0.5.0` admission into `Cargo.lock` (`INT-AS-001a` / `BD-325`).
+- The `asupersync` native `LabRuntime` adapter is not written. `asupersync =0.6.2` is admitted (`INT-AS-001a` / `BD-325`), so it waits only on `INT-AS-001b` (`BD-257`).
 - 1,000-seed partition and crash chaos campaign wiring all FM oracles against live `fmine-sync` replicas belongs to `GATE-SYNC-01` (`BD-109`).
 
 ## 11. Public API
