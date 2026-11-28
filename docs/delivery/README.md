@@ -12,6 +12,7 @@ This directory holds machine- and human-verifiable admission records (`INT-*`), 
 - FACT. No oracle crate is in the production closure (191 packages), and all 11 fixtures have capture records, measured locally at `e9400927`; check-all re-measures it in every CI job. [GATE-ORACLE-01](./GATE-ORACLE-01.md)
 - [`GATE-BM-01.md`](./GATE-BM-01.md) — lifted `VdbGrid` at 10⁸ active cells (`BD-191`): PASS measured locally at `ef49fcf` (ratio 1.352 ≤ 2.5); self-verified; the test is ignored in CI.
 - [`GATE-PUSH-PIT1.md`](./GATE-PUSH-PIT1.md) — MineLib UPIT exact with verified closure (`BD-250`): PASS measured locally at `ef49fcf` on all 11 instances; self-verified; MineLib's files are not committed, so CI cannot run it.
+- [`GATE-CORE-01.md`](./GATE-CORE-01.md) — 10⁵ holes / 2 × 10⁷ intervals rebuilt from ledger segments, desurveyed and composited (`BD-173`): PASS measured locally at `a2fb2bc0`, rebuild 652.8 s and 633.2 s against 900 s on a loaded host; self-verified; the test is ignored in CI.
 
 ## Kill-gate records
 - [`KILL-PUSH-PDLP.md`](./KILL-PUSH-PDLP.md) — PDLP to a 1e-4 certified gap on real-size non-closure LPs (`BD-251`). PASS, so the kill does not fire, measured locally at `9b9fe28`:
