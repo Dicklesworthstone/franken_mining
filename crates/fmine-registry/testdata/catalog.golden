@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 99
+[verbs] 102
 decide card
 decide production
 decide investment
@@ -172,4 +172,7 @@ forecast spatial-monitor
 drill desurvey
 drill composite
 drill qaqc
+drill blanks
+drill duplicates
+drill monitor
 metrics roce

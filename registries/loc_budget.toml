@@ -4,7 +4,7 @@
 
 schema_version = 1
 program_planned_loc = 1192000
-program_ceiling_loc = 1375000
+program_ceiling_loc = 1381000
 
 [[crate]]
 name = "fmine-core"
@@ -462,7 +462,7 @@ layer = "U"
 subsystem = "Adit"
 phase = "A"
 planned_loc = 54000
-ceiling_loc = 66000
+ceiling_loc = 72000
 charter = "Binary fmine; robot NDJSON; verb registry; doctor and repair"
 
 [[crate]]

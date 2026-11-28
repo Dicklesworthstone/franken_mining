@@ -591,6 +591,24 @@ mutates_authority = false
 description = "Score a declared CRM batch on three named SD bases with CANMET and a conditional signed bias interval, preserving every observation and source identity"
 
 [[verb]]
+path = "drill blanks"
+subsystem = "Corebox"
+mutates_authority = false
+description = "Evaluate source-bound blank contamination under explicit versioned AND, OR or detection-limit rules while retaining censored and indeterminate outcomes"
+
+[[verb]]
+path = "drill duplicates"
+subsystem = "Corebox"
+mutates_authority = false
+description = "Assess source-bound duplicate precision by stage and grade band with support checks, every exclusion, explicit denominators and stage identifiability"
+
+[[verb]]
+path = "drill monitor"
+subsystem = "Corebox"
+mutates_authority = false
+description = "Replay a declared CRM stream through the sequential e-process and pattern monitors, retaining each prefix, source identity and integrity alarm"
+
+[[verb]]
 path = "metrics roce"
 subsystem = "Bullion"
 mutates_authority = false

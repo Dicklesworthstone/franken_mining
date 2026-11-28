@@ -1,0 +1,78 @@
+# SYNTHETIC: a positive CRM shift followed by exact repeated reference values.
+schema = "fmine.crm-monitor.v1"
+crm_id = "SYNTHETIC-CRM"
+lab = "SYNTHETIC-LAB"
+analyte = "Fe"
+method = "fusion_xrf"
+unit = "mass_fraction"
+basis = "dry"
+certificate_source = "Synthetic fixed reference; no external certificate."
+policy_id = "synthetic.crm.monitor"
+policy_version = "1"
+policy_source = "Declared demonstration policy; not a site acceptance rule."
+evidence_lane = "synthetic"
+omitted_uncertainty = "Reference uncertainty, serial dependence, method changes and missing observations."
+certified_mean = "0.5"
+reference_sd = "0.0625"
+sd_basis = "sigma_c"
+eproc_alpha = "0.05"
+sign_min_samples = "6"
+sign_alpha = "0.05"
+dispersion_window = "6"
+collapse_ratio_threshold = "0.45"
+dispersion_alpha = "0.001"
+
+[[observation]]
+sample_id = "CRM-01"
+value = "0.640625"
+[[observation]]
+sample_id = "CRM-02"
+value = "0.78125"
+[[observation]]
+sample_id = "CRM-03"
+value = "0.671875"
+[[observation]]
+sample_id = "CRM-04"
+value = "0.8125"
+[[observation]]
+sample_id = "CRM-05"
+value = "0.6875"
+[[observation]]
+sample_id = "CRM-06"
+value = "0.796875"
+[[observation]]
+sample_id = "CRM-07"
+value = "0.703125"
+[[observation]]
+sample_id = "CRM-08"
+value = "0.78125"
+[[observation]]
+sample_id = "CRM-09"
+value = "0.640625"
+[[observation]]
+sample_id = "CRM-10"
+value = "0.75"
+[[observation]]
+sample_id = "CRM-11"
+value = "0.671875"
+[[observation]]
+sample_id = "CRM-12"
+value = "0.8125"
+[[observation]]
+sample_id = "CRM-13"
+value = "0.5"
+[[observation]]
+sample_id = "CRM-14"
+value = "0.5"
+[[observation]]
+sample_id = "CRM-15"
+value = "0.5"
+[[observation]]
+sample_id = "CRM-16"
+value = "0.5"
+[[observation]]
+sample_id = "CRM-17"
+value = "0.5"
+[[observation]]
+sample_id = "CRM-18"
+value = "0.5"

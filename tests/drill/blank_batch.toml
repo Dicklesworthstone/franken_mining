@@ -1,0 +1,91 @@
+# Synthetic contamination-screening exercise. No site or laboratory qualification is asserted.
+schema = "fmine.blank-batch.v1"
+analyte = "Au"
+method = "fire_assay_aas"
+unit = "mass_fraction"
+basis = "dry"
+evidence_lane = "synthetic"
+source_description = "Synthetic blanks with known censoring and carryover ambiguity"
+omitted_uncertainty = "Certificate authenticity, assay error and laboratory sequence are unverified"
+policy_id = "synthetic.blank.carryover"
+policy_version = "1"
+policy_source = "Synthetic exercise with explicit AND logic; not an approved site policy"
+rule = "carryover_and"
+abs_threshold = "0.00000002"
+carryover_fraction = "0.01"
+
+[[observation]]
+result_id = "R-01"
+sample_id = "BLANK-01"
+lab = "SYNTHETIC-A"
+batch = "BATCH-A"
+stage = "coarse"
+value = "<0.000000005"
+preceding_sample_id = "ORE-01"
+preceding_value = "0.000005"
+
+[[observation]]
+result_id = "R-02"
+sample_id = "BLANK-02"
+lab = "SYNTHETIC-A"
+batch = "BATCH-A"
+stage = "coarse"
+value = "0.000000025"
+preceding_sample_id = "ORE-02"
+preceding_value = "0.000005"
+
+[[observation]]
+result_id = "R-03"
+sample_id = "BLANK-03"
+lab = "SYNTHETIC-A"
+batch = "BATCH-A"
+stage = "pulp"
+value = "<0.0000001"
+preceding_sample_id = "ORE-03"
+preceding_value = "0.000005"
+
+[[observation]]
+result_id = "R-04"
+sample_id = "BLANK-04"
+lab = "SYNTHETIC-A"
+batch = "BATCH-A"
+stage = "pulp"
+value = "0.00000015"
+preceding_sample_id = "ORE-04"
+preceding_value = ">0.00001"
+
+[[observation]]
+result_id = "R-05"
+sample_id = "BLANK-05"
+lab = "SYNTHETIC-B"
+batch = "BATCH-B"
+stage = "coarse"
+value = "0.000000025"
+
+[[observation]]
+result_id = "R-06"
+sample_id = "BLANK-06"
+lab = "SYNTHETIC-B"
+batch = "BATCH-B"
+stage = "pulp"
+value = ">0.00000001"
+preceding_sample_id = "ORE-06"
+preceding_value = "0.000005"
+
+[[observation]]
+result_id = "R-07"
+sample_id = "BLANK-07"
+lab = "SYNTHETIC-B"
+batch = "BATCH-B"
+stage = "pulp"
+value = ">0.0000001"
+preceding_sample_id = "ORE-07"
+preceding_value = "0.000005"
+
+[[observation]]
+result_id = "R-08"
+sample_id = "BLANK-08"
+lab = "SYNTHETIC-B"
+batch = "BATCH-B"
+stage = "coarse"
+value = "0"

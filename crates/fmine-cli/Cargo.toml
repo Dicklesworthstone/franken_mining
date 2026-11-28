@@ -30,6 +30,7 @@ fmine-capital = { path = "../fmine-capital" }
 fmine-econ = { path = "../fmine-econ" }
 fmine-explore = { path = "../fmine-explore" }
 fmine-drill = { path = "../fmine-drill" }
+fmine-qaqc = { path = "../fmine-qaqc" }
 fmine-object = { path = "../fmine-object" }
 fmine-io = { path = "../fmine-io" }
 fmine-public = { path = "../fmine-public" }
