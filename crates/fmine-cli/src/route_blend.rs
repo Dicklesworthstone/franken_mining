@@ -31,6 +31,7 @@ const MAX_PACKAGE_CHANGES: usize = 4;
 const CAPACITY_TARGET_FIELDS: [&str; 3] = ["period", "route", "parcel"];
 const SCOPE: &str = "One period of already-mined, divisible feed with fixed per-pair recovery, additive specific energy and declared variable costs. The allocation is conditional on these uncalibrated inputs.";
 const HORIZON_SCOPE: &str = "The worksheet carries fixed-grade parcels through at most four periods. Declared arrivals enter before routing, and storage caps apply at period close. Contribution uses declared discounts, fixed per-pair recovery, additive specific energy and variable costs.";
+const CAMPAIGN_SCOPE: &str = "The horizon compares two mutually exclusive modes of one circuit over up to four periods. Both modes use fixed per-pair recovery and declared assay windows. A mode change at a period start pays its declared cost at that period's discount, even when the circuit receives no ore. The worksheet assumes changeovers fit between periods and supplies no operating authorization.";
 const CAPACITY_SCOPE: &str = "Each option separately increases one declared cap and reoptimizes the full horizon. The quoted cost is already discounted in the worksheet currency and project basis. Option values apply to the declared increase under the submitted assumptions.";
 const PACKAGE_SCOPE: &str = "Each option reoptimizes the same horizon. A package applies all its declared changes together and pays one quoted cost. Costs are already discounted in the worksheet currency and project basis. All values are conditional on the submitted assumptions.";
 pub(super) const ROBOT_DOCS_JSON: &str = concat!(
@@ -40,6 +41,7 @@ pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     r#""market":"One shared market_recovered_metal_cap, price_per_metal_unit and selling_cost_per_metal_unit. Objective is recovered metal at net price less milling and haul costs. Idle feed is feasible.","#,
     r#""assay_windows":{"example":"tests/planning/route_blend_assay_windows.json","declaration":"Optional analytes array of one to three distinct constituents. Each parcel supplies every named dry-mass fraction in assays. Each route may declare assay_windows keyed by name, with min, max, or both as exact decimal mass fractions. Use this form in either schema. It is exclusive with the single-impurity fields."},"#,
     r#""horizon":{"schema":"fmine.route-blend-horizon.v1","example":"tests/planning/route_blend_horizon.json","periods":"Replace the root period, market, price, selling and routes fields with an ordered periods array, containing up to four objects with id, discount_factor in [0,1], arrivals (parcel and dry_tonnes rows), routes and the market and economic fields. Each parcel can declare stockpile_cap_dry_tonnes. Closing stock carries on the same parcel and basis; caps apply at each close.", "#,
+    r#""campaign":{"example":"tests/planning/route_blend_campaign.json","declaration":"Optional horizon campaign with exactly two route_modes named in every period, an initial_mode from that pair, and nonnegative switch_cost in nominal worksheet currency. Exactly one mode is available each period. Mode transitions are discounted in the receiving period. Capacity options reoptimize the mode schedule."},"#,
     r#""capacity_options":{"example":"tests/planning/route_blend_capacity_options.json","declaration":"Optional array of 1 to 8 independent options, each with unique id, kind, positive increase and nonnegative present_value_cost in the worksheet currency. Use period and route for route_throughput (dry metric tonnes) or route_energy (kWh), period for market (recovered metal unit), or parcel for stockpile (dry metric tonnes at every period close). Energy and stockpile increases require a declared finite base cap. All options compare against the same feasible baseline.", "#,
     r#""package_example":"tests/planning/route_blend_capacity_packages.json","packages":"Use an option with only id, present_value_cost and a changes array of two to four distinct cap targets. Each change supplies kind, increase and its target fields. All changes enter one reoptimization and the quoted package cost is charged once."}}}"#,
 );
@@ -147,6 +149,225 @@ impl DeclaredPeriod<'_> {
             price_per_metal_unit: self.price,
             selling_cost_per_metal_unit: self.selling,
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Campaign<'a> {
+    modes: [&'a str; 2],
+    initial: usize,
+    switch_cost: ExactQty,
+}
+
+struct CampaignChoice<'a> {
+    campaign: Campaign<'a>,
+    path: Vec<usize>,
+    switches: usize,
+    discounted_switch_cost: ExactQty,
+    net: ExactQty,
+    paths: usize,
+    feasible_paths: usize,
+}
+
+struct HorizonEvaluation<'a> {
+    routing: routing::HorizonRouting,
+    campaign: Option<CampaignChoice<'a>>,
+}
+
+impl HorizonEvaluation<'_> {
+    fn net(&self) -> ExactQty {
+        self.campaign
+            .as_ref()
+            .map_or(self.routing.discounted_contribution, |choice| choice.net)
+    }
+}
+
+fn read_campaign(value: &Json) -> Result<Campaign<'_>, Refusal> {
+    object(value, &["route_modes", "initial_mode", "switch_cost"])?;
+    let [first, second] = rows(value, "route_modes", 2)? else {
+        return Err(declaration("a campaign requires exactly two route modes"));
+    };
+    let modes = [first, second].map(|entry| entry.as_str().filter(|name| valid_label(name)));
+    let [Some(first), Some(second)] = modes else {
+        return Err(declaration(
+            "campaign route modes require printable route ids",
+        ));
+    };
+    if first == second {
+        return Err(declaration("campaign route modes must be distinct"));
+    }
+    let modes = [first, second];
+    let initial_mode = label(value, "initial_mode")?;
+    let initial = modes
+        .iter()
+        .position(|name| *name == initial_mode)
+        .ok_or_else(|| declaration("initial_mode must identify one of the campaign routes"))?;
+    let switch_cost = quantity(value, "switch_cost")?;
+    if switch_cost.signum() < 0 {
+        return Err(Refusal::new(
+            RefusalCode::OutsidePhysicalDomain109,
+            "campaign switch_cost must be nonnegative",
+        ));
+    }
+    Ok(Campaign {
+        modes,
+        initial,
+        switch_cost,
+    })
+}
+
+fn campaign_arithmetic(_: fmine_units::UnitsError) -> Refusal {
+    Refusal::new(
+        RefusalCode::NumericalCertificateFailed207,
+        "campaign contribution or switch cost exceeds exact arithmetic range",
+    )
+}
+
+fn solve_declared_horizon<'a>(
+    horizon: Horizon<'_>,
+    periods: &[DeclaredPeriod<'_>],
+    campaign: Option<Campaign<'a>>,
+) -> Result<HorizonEvaluation<'a>, Refusal> {
+    let Some(campaign) = campaign else {
+        return Ok(HorizonEvaluation {
+            routing: routing::solve_horizon(horizon)?,
+            campaign: None,
+        });
+    };
+    let mut indices = Vec::with_capacity(periods.len());
+    for period in periods {
+        let route_index = |mode| {
+            period
+                .route_ids
+                .iter()
+                .position(|name| *name == mode)
+                .ok_or_else(|| {
+                    declaration(format!("campaign route {mode} is missing in {}", period.id))
+                })
+        };
+        indices.push([
+            route_index(campaign.modes[0])?,
+            route_index(campaign.modes[1])?,
+        ]);
+    }
+    let zero = ExactQty::from_integer(0);
+    let paths = 1 << periods.len();
+    let mut feasible_paths = 0;
+    let mut best: Option<(routing::HorizonRouting, CampaignChoice<'_>)> = None;
+    for mask in 0..paths {
+        let path: Vec<_> = (0..periods.len())
+            .map(|index| (mask >> (periods.len() - 1 - index)) & 1)
+            .collect();
+        let mut routes = Vec::with_capacity(periods.len());
+        for ((period, route_indices), &mode) in periods.iter().zip(&indices).zip(&path) {
+            let mut variants = period.routes.clone();
+            let inactive_cap = &mut variants[route_indices[1 - mode]].dry_tonnes_cap;
+            if inactive_cap.signum() > 0 {
+                *inactive_cap = zero;
+            }
+            routes.push(variants);
+        }
+        let variants: Vec<_> = horizon
+            .periods
+            .iter()
+            .zip(&routes)
+            .map(|(&period, routes)| Period { routes, ..period })
+            .collect();
+        let Some(routing) = routing::try_solve_horizon(Horizon {
+            periods: &variants,
+            ..horizon
+        })?
+        else {
+            continue;
+        };
+        feasible_paths += 1;
+        let mut previous = campaign.initial;
+        let mut switches = 0;
+        let mut discounted_switch_cost = zero;
+        for (period, &mode) in periods.iter().zip(&path) {
+            if mode != previous {
+                let cost = campaign
+                    .switch_cost
+                    .checked_mul(period.discount)
+                    .map_err(campaign_arithmetic)?;
+                discounted_switch_cost = discounted_switch_cost
+                    .checked_add(cost)
+                    .map_err(campaign_arithmetic)?;
+                switches += 1;
+            }
+            previous = mode;
+        }
+        let net = routing
+            .discounted_contribution
+            .checked_sub(discounted_switch_cost)
+            .map_err(campaign_arithmetic)?;
+        if let Some((_, incumbent)) = &best {
+            let order = net
+                .checked_cmp(incumbent.net)
+                .map_err(campaign_arithmetic)?;
+            if order.is_lt() || (order.is_eq() && switches >= incumbent.switches) {
+                continue;
+            }
+        }
+        best = Some((
+            routing,
+            CampaignChoice {
+                campaign,
+                path,
+                switches,
+                discounted_switch_cost,
+                net,
+                paths,
+                feasible_paths: 0,
+            },
+        ));
+    }
+    let (routing, mut choice) = best.ok_or_else(|| {
+        Refusal::new(
+            RefusalCode::OutsidePhysicalDomain109,
+            "no campaign mode sequence can satisfy the declared stockpile and processing caps",
+        )
+    })?;
+    choice.feasible_paths = feasible_paths;
+    Ok(HorizonEvaluation {
+        routing,
+        campaign: Some(choice),
+    })
+}
+
+impl CampaignChoice<'_> {
+    fn path_label(&self) -> String {
+        self.path
+            .iter()
+            .map(|&mode| markdown_cell(self.campaign.modes[mode]))
+            .collect::<Vec<_>>()
+            .join(" → ")
+    }
+
+    fn json(&self, periods: &[DeclaredPeriod<'_>], gross: ExactQty) -> String {
+        let path = periods
+            .iter()
+            .zip(&self.path)
+            .map(|(period, &mode)| {
+                format!(
+                    "{{\"period\":{},\"mode\":{}}}",
+                    js(period.id),
+                    js(self.campaign.modes[mode])
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "{{\"initial_mode\":{},\"switch_cost\":{},\"switches\":{},\"gross_discounted_contribution\":{},\"discounted_switch_cost\":{},\"net_discounted_contribution\":{},\"enumerated_paths\":{},\"feasible_paths\":{},\"period_modes\":[{path}]}}",
+            js(self.campaign.modes[self.campaign.initial]),
+            q(self.campaign.switch_cost),
+            self.switches,
+            q(gross),
+            q(self.discounted_switch_cost),
+            q(self.net),
+            self.paths,
+            self.feasible_paths
+        )
     }
 }
 
@@ -319,6 +540,7 @@ fn evaluate(text: &str, source: &SourceAnchor) -> Result<Envelope, Refusal> {
             "routes",
             "periods",
             "capacity_options",
+            "campaign",
         ],
     )?;
     let horizon = match field(&doc, "schema")? {
@@ -350,6 +572,9 @@ fn evaluate(text: &str, source: &SourceAnchor) -> Result<Envelope, Refusal> {
     }
     if !horizon && doc.get("capacity_options").is_some() {
         return Err(declaration("capacity options require the horizon schema"));
+    }
+    if !horizon && doc.get("campaign").is_some() {
+        return Err(declaration("campaign modes require the horizon schema"));
     }
     if field(&doc, "ore_mass_basis")? != "dry_metric_tonne"
         || field(&doc, "ownership_basis")? != "100_percent_project"
@@ -452,7 +677,8 @@ fn evaluate(text: &str, source: &SourceAnchor) -> Result<Envelope, Refusal> {
             stockpile_caps_dry_tonnes: &caps,
             physical_grade_limit,
         };
-        let result = routing::solve_horizon(horizon)?;
+        let campaign = doc.get("campaign").map(read_campaign).transpose()?;
+        let result = solve_declared_horizon(horizon, &periods, campaign)?;
         let options = if doc.get("capacity_options").is_some() {
             Some(compare_capacity(
                 rows(&doc, "capacity_options", MAX_CAPACITY_OPTIONS)?,
@@ -460,7 +686,8 @@ fn evaluate(text: &str, source: &SourceAnchor) -> Result<Envelope, Refusal> {
                 horizon,
                 &periods,
                 &parcel_index,
-                result.discounted_contribution,
+                result.net(),
+                campaign,
             )?)
         } else {
             None
@@ -742,7 +969,7 @@ fn render_horizon(
     parcels: &[Parcel],
     caps: &[Option<ExactQty>],
     periods: &[DeclaredPeriod<'_>],
-    result: routing::HorizonRouting,
+    evaluation: HorizonEvaluation<'_>,
     options: Option<CapacityComparison>,
 ) -> Result<Envelope, Refusal> {
     let Report {
@@ -753,14 +980,40 @@ fn render_horizon(
         source,
         ..
     } = *report;
+    let net = evaluation.net();
+    let HorizonEvaluation {
+        routing: result,
+        campaign,
+    } = evaluation;
     let mut markdown = format!(
         "# Ore routing and stockpile carry\n\n{} · {unit} · {currency} · 100% project basis\n\nInputs are {evidence} and uncalibrated. Source SHA-256 `{}`.\n\n**{} dry tonnes** recover **{} {unit}** and contribute **{} {currency}** discounted across the declared periods.\n",
         markdown_cell(metal),
         fmine_core::Digest32(source.artifact_sha256),
         exact(result.total.dry_tonnes),
         exact(result.total.recovered_metal),
-        exact(result.discounted_contribution)
+        exact(net)
     );
+    let (campaign_json, scope) = if let Some(choice) = &campaign {
+        let _ = writeln!(
+            markdown,
+            "\n**Circuit mode by period** {}\n\n{} changeovers cost **{} {currency}** discounted. Gross discounted routing contribution is **{} {currency}**. Only the selected mode can receive feed in each period. Evaluated {} feasible paths out of {}.",
+            choice.path_label(),
+            choice.switches,
+            exact(choice.discounted_switch_cost),
+            exact(result.discounted_contribution),
+            choice.feasible_paths,
+            choice.paths
+        );
+        (
+            format!(
+                ",\"campaign\":{}",
+                choice.json(periods, result.discounted_contribution)
+            ),
+            CAMPAIGN_SCOPE,
+        )
+    } else {
+        (String::new(), HORIZON_SCOPE)
+    };
     let mut opening: Vec<_> = parcels.iter().map(|p| p.available_dry_tonnes).collect();
     let mut period_json = Vec::new();
     let arithmetic = |_| {
@@ -818,15 +1071,15 @@ fn render_horizon(
         markdown.push_str(&options.markdown);
         let _ = write!(capacity, ",\"capacity_comparison\":{}", options.json);
     }
-    let _ = writeln!(markdown, "\n{HORIZON_SCOPE}");
+    let _ = writeln!(markdown, "\n{scope}");
     let payload = format!(
-        "{{\"schema\":\"{HORIZON_SCHEMA}\",{},\"total\":{{{},\"discounted_contribution\":{}}},\"periods\":[{}]{capacity}}}",
+        "{{\"schema\":\"{HORIZON_SCHEMA}\",{},\"total\":{{{},\"discounted_contribution\":{}}},\"periods\":[{}]{campaign_json}{capacity}}}",
         report.basis_json(),
         allocation(result.total),
-        q(result.discounted_contribution),
+        q(net),
         period_json.join(",")
     );
-    Ok(response(payload, markdown, HORIZON_SCOPE))
+    Ok(response(payload, markdown, scope))
 }
 
 fn capacity_limit<'a, 'b>(
@@ -997,6 +1250,7 @@ fn compare_capacity(
     periods: &[DeclaredPeriod<'_>],
     parcel_index: &BTreeMap<&str, usize>,
     base: ExactQty,
+    campaign: Option<Campaign<'_>>,
 ) -> Result<CapacityComparison, Refusal> {
     if declared_options.is_empty() {
         return Err(declaration("capacity_options requires at least one option"));
@@ -1010,8 +1264,17 @@ fn compare_capacity(
         CAPACITY_SCOPE
     };
     let currency = report.currency;
+    let (campaign_header, campaign_separator, comparison_basis) = if campaign.is_some() {
+        (
+            " Mode schedule |",
+            "---|",
+            ",\"comparison_basis\":\"net_of_campaign_switch_cost\"",
+        )
+    } else {
+        ("", "", "")
+    };
     let mut markdown = format!(
-        "\n## Capacity options\n\n| Option | Capacity and target | Current to proposed cap | Break-even cost ({currency}) | Quoted cost ({currency}) | Net improvement ({currency}) |\n|---|---|---:|---:|---:|---:|\n"
+        "\n## Capacity options\n\n| Option | Capacity and target | Current to proposed cap | Break-even cost ({currency}) | Quoted cost ({currency}) | Net improvement ({currency}) |{campaign_header}\n|---|---|---:|---:|---:|---:|{campaign_separator}\n"
     );
     let mut ids = BTreeSet::new();
     let mut best = Vec::new();
@@ -1057,16 +1320,18 @@ fn compare_capacity(
         let mut caps = horizon.stockpile_caps_dry_tonnes.to_vec();
         let changes =
             apply_capacity_changes(changes, &mut variant, parcel_index, &mut caps, report.unit)?;
-        let periods: Vec<_> = variant.iter().map(DeclaredPeriod::model).collect();
-        let result = routing::solve_horizon(Horizon {
-            periods: &periods,
-            stockpile_caps_dry_tonnes: &caps,
-            ..horizon
-        })?;
-        let gain = result
-            .discounted_contribution
-            .checked_sub(base)
-            .map_err(capacity_arithmetic)?;
+        let models: Vec<_> = variant.iter().map(DeclaredPeriod::model).collect();
+        let result = solve_declared_horizon(
+            Horizon {
+                periods: &models,
+                stockpile_caps_dry_tonnes: &caps,
+                ..horizon
+            },
+            &variant,
+            campaign,
+        )?;
+        let value = result.net();
+        let gain = value.checked_sub(base).map_err(capacity_arithmetic)?;
         if gain.signum() < 0 {
             return Err(Refusal::new(
                 RefusalCode::NumericalCertificateFailed207,
@@ -1085,9 +1350,19 @@ fn compare_capacity(
         if net == best_net && net.signum() > 0 {
             best.push(id);
         }
+        let (campaign_cell, campaign_json) = match &result.campaign {
+            Some(choice) => (
+                format!(" {} |", choice.path_label()),
+                format!(
+                    ",\"campaign\":{}",
+                    choice.json(&variant, result.routing.discounted_contribution)
+                ),
+            ),
+            None => (String::new(), String::new()),
+        };
         let _ = writeln!(
             markdown,
-            "| {} | {} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} | {} |{campaign_cell}",
             markdown_cell(id),
             changes.targets,
             changes.limits,
@@ -1096,9 +1371,9 @@ fn compare_capacity(
             exact(net)
         );
         options.push(format!(
-            "{{\"id\":{},{},\"discounted_contribution\":{},\"break_even_present_value_cost\":{},\"present_value_cost\":{},\"net_present_value_improvement\":{},\"total\":{{{}}}}}",
-            js(id), changes.json, q(result.discounted_contribution),
-            q(gain), q(cost), q(net), allocation(result.total)
+            "{{\"id\":{},{},\"discounted_contribution\":{},\"break_even_present_value_cost\":{},\"present_value_cost\":{},\"net_present_value_improvement\":{},\"total\":{{{}}}{campaign_json}}}",
+            js(id), changes.json, q(value),
+            q(gain), q(cost), q(net), allocation(result.routing.total)
         ));
     }
     if best.is_empty() {
@@ -1119,9 +1394,14 @@ fn compare_capacity(
         );
     }
     let _ = writeln!(markdown, "\n{scope}");
+    if campaign.is_some() {
+        markdown.push_str(
+            "\nBreak-even values compare contribution after discounted changeover costs.\n",
+        );
+    }
     let best = best.into_iter().map(js).collect::<Vec<_>>().join(",");
     let json = format!(
-        "{{\"base_discounted_contribution\":{},\"best_positive_options\":[{best}],\"options\":[{}],\"scope\":{}}}",
+        "{{\"base_discounted_contribution\":{},\"best_positive_options\":[{best}],\"options\":[{}],\"scope\":{}{comparison_basis}}}",
         q(base),
         options.join(","),
         js(scope)

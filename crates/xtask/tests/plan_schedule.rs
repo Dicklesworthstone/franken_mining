@@ -30,6 +30,212 @@ fn binary() -> PathBuf {
 }
 
 #[test]
+fn plan_blend_optimizes_exclusive_campaigns_after_discounted_changeovers() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let input = std::path::Path::new("tests/planning/route_blend_campaign.json");
+    let original = std::fs::read_to_string(root.join(input)).unwrap();
+    let output = blend(&root, input, "json");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(blend(&root, input, "json").stdout, output.stdout);
+    let envelope = blend_envelope(&output);
+    let payload = envelope.get("payload").unwrap();
+    expect(
+        payload.get("source").unwrap(),
+        "sha256",
+        &sha256(original.as_bytes()).to_hex(),
+    );
+    expect(
+        payload.get("total").unwrap(),
+        "discounted_contribution",
+        "568/1",
+    );
+    let campaign = payload.get("campaign").unwrap();
+    expect(campaign, "gross_discounted_contribution", "620/1");
+    expect(campaign, "discounted_switch_cost", "52/1");
+    expect(campaign, "net_discounted_contribution", "568/1");
+    assert_eq!(campaign.get("switches"), Some(&Json::Number("2".into())));
+    assert_eq!(
+        campaign.get("enumerated_paths"),
+        Some(&Json::Number("8".into()))
+    );
+    assert_eq!(
+        campaign.get("feasible_paths"),
+        Some(&Json::Number("8".into()))
+    );
+    let modes = |choice: &Json| {
+        choice
+            .get("period_modes")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row.get("mode").unwrap().as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(modes(campaign), ["alkaline", "acid", "alkaline"]);
+    let periods = payload.get("periods").unwrap().as_array().unwrap();
+    let expected = [
+        ("week-1", ["0/1", "0/1"], ["2/1", "0/1"]),
+        ("week-2", ["0/1", "2/1"], ["2/1", "0/1"]),
+        ("week-3", ["2/1", "0/1"], ["0/1", "0/1"]),
+    ];
+    for (period, (id, tonnes, closing)) in periods.iter().zip(expected) {
+        expect(period, "period", id);
+        let routes = period.get("routes").unwrap().as_array().unwrap();
+        let stock = period.get("parcels").unwrap().as_array().unwrap();
+        for (row, tonnes) in routes.iter().zip(tonnes) {
+            expect(row, "dry_tonnes", tonnes);
+        }
+        for (row, tonnes) in stock.iter().zip(closing) {
+            expect(row, "closing_dry_tonnes", tonnes);
+        }
+    }
+    let comparison = payload.get("capacity_comparison").unwrap();
+    expect(comparison, "base_discounted_contribution", "568/1");
+    expect(
+        comparison,
+        "comparison_basis",
+        "net_of_campaign_switch_cost",
+    );
+    let option = &comparison.get("options").unwrap().as_array().unwrap()[0];
+    expect(option, "discounted_contribution", "600/1");
+    expect(option, "break_even_present_value_cost", "32/1");
+    expect(option, "net_present_value_improvement", "22/1");
+    let expanded = option.get("campaign").unwrap();
+    expect(expanded, "gross_discounted_contribution", "620/1");
+    expect(expanded, "discounted_switch_cost", "20/1");
+    assert_eq!(modes(expanded), ["alkaline", "alkaline", "acid"]);
+
+    let markdown = blend(&root, input, "markdown");
+    assert!(markdown.status.success());
+    let markdown = String::from_utf8(markdown.stdout).unwrap();
+    assert!(markdown.contains("**Circuit mode by period** alkaline → acid → alkaline"));
+    assert!(markdown.contains("| 32/1 | 10/1 | 22/1 | alkaline → alkaline → acid |"));
+
+    let scratch = std::env::temp_dir().join(format!(
+        "fmine-route-campaign-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&scratch).unwrap();
+    let submit = |name: &str, worksheet: &str| {
+        let path = scratch.join(name);
+        std::fs::write(&path, worksheet).unwrap();
+        blend_envelope(&blend(&root, &path, "json"))
+    };
+    let high_cost = original.replace(r#""switch_cost": "40""#, r#""switch_cost": "1000""#);
+    let result = submit("high-cost.json", &high_cost);
+    let campaign = result.get("payload").unwrap().get("campaign").unwrap();
+    expect(campaign, "net_discounted_contribution", "320/1");
+    assert_eq!(modes(campaign), ["alkaline", "alkaline", "alkaline"]);
+
+    let no_price = original
+        .replace(r#""initial_mode": "alkaline""#, r#""initial_mode": "acid""#)
+        .replace(r#""switch_cost": "40""#, r#""switch_cost": "0""#)
+        .replace(
+            r#""price_per_metal_unit": "50""#,
+            r#""price_per_metal_unit": "0""#,
+        )
+        .replace(
+            r#""price_per_metal_unit": "100""#,
+            r#""price_per_metal_unit": "0""#,
+        )
+        .replace(
+            r#""price_per_metal_unit": "150""#,
+            r#""price_per_metal_unit": "0""#,
+        );
+    let result = submit("idle-tie.json", &no_price);
+    let campaign = result.get("payload").unwrap().get("campaign").unwrap();
+    assert_eq!(modes(campaign), ["acid", "acid", "acid"]);
+    expect(campaign, "net_discounted_contribution", "0/1");
+
+    let force_acid = original.replace(
+        r#""id": "low-carbonate", "available_dry_tonnes": "0""#,
+        r#""id": "low-carbonate", "available_dry_tonnes": "0", "stockpile_cap_dry_tonnes": "0""#,
+    );
+    let result = submit("forced-mode.json", &force_acid);
+    let campaign = result.get("payload").unwrap().get("campaign").unwrap();
+    assert_eq!(
+        campaign.get("feasible_paths"),
+        Some(&Json::Number("4".into()))
+    );
+    assert_eq!(modes(campaign), ["alkaline", "acid", "alkaline"]);
+
+    let force_first = force_acid.replace(
+        r#""available_dry_tonnes": "0""#,
+        r#""available_dry_tonnes": "2""#,
+    );
+    let result = submit("first-period-change.json", &force_first);
+    let campaign = result.get("payload").unwrap().get("campaign").unwrap();
+    assert_eq!(modes(campaign), ["acid", "acid", "alkaline"]);
+    expect(campaign, "discounted_switch_cost", "60/1");
+    expect(campaign, "net_discounted_contribution", "760/1");
+
+    let impossible = force_first.replace(
+        r#""id": "high-carbonate", "available_dry_tonnes": "2""#,
+        r#""id": "high-carbonate", "available_dry_tonnes": "2", "stockpile_cap_dry_tonnes": "0""#,
+    );
+    let result = submit("infeasible.json", &impossible);
+    assert_eq!(result.get("payload"), Some(&Json::Null));
+    expect(result.get("refusal").unwrap(), "code", "FMINE-REF-109");
+    assert!(
+        result
+            .get("refusal")
+            .unwrap()
+            .get("what")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("no campaign mode sequence")
+    );
+
+    for (name, from, to, code) in [
+        (
+            "duplicate",
+            r#"["alkaline", "acid"]"#,
+            r#"["acid", "acid"]"#,
+            "FMINE-REF-107",
+        ),
+        (
+            "initial",
+            r#""initial_mode": "alkaline""#,
+            r#""initial_mode": "other""#,
+            "FMINE-REF-107",
+        ),
+        (
+            "missing",
+            r#""id": "acid", "dry_tonnes_cap": "2""#,
+            r#""id": "other", "dry_tonnes_cap": "2""#,
+            "FMINE-REF-107",
+        ),
+        (
+            "switch",
+            r#""switch_cost": "40""#,
+            r#""switch_cost": "-1""#,
+            "FMINE-REF-109",
+        ),
+        (
+            "cap",
+            r#""id": "acid", "dry_tonnes_cap": "1""#,
+            r#""id": "acid", "dry_tonnes_cap": "-1""#,
+            "FMINE-REF-109",
+        ),
+    ] {
+        assert!(original.contains(from));
+        let result = submit(&format!("{name}.json"), &original.replacen(from, to, 1));
+        assert_eq!(result.get("payload"), Some(&Json::Null));
+        expect(result.get("refusal").unwrap(), "code", code);
+    }
+}
+
+#[test]
 fn plan_blend_enforces_exact_two_sided_named_assay_windows() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let input = std::path::Path::new("tests/planning/route_blend_assay_windows.json");

@@ -256,6 +256,9 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
   contribution. A zero optimum prefers idle when permitted by the declared caps. Grades and assays remain
   fixed for each parcel. The horizon takes arrivals as inputs and does not plan mining or model interactions
   among stockpiled parcels.
+- `cutoff::routing::try_solve_horizon` (DESIGN, BD-252 §15.6, bd-vslr) is the same fixed-horizon solve
+  with a distinct no-solution result for infeasible caps. Input errors and uncertified arithmetic remain typed
+  refusals. The CLI uses this distinction when comparing exclusive circuit modes with discounted switch costs.
 - Named assay windows (DESIGN, BD-252 §15.6, bd-h6g6) share up to three dry-mass
   constituent coordinates across parcels. Each route can bound each blended fraction
   above, below or on both sides, with independently exact rows. The optimizer

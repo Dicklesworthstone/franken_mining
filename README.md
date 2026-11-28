@@ -1653,6 +1653,27 @@ there is only a **3% sulphide-sulphur minimum**, the optimum uses equal quantiti
 of the sulphide-rich and higher-grade feed. Assays apply to the supplied dry-mass basis,
 with fixed parcel grades and additive constituent mass.
 
+### Schedule a circuit with two operating modes
+
+Add a `campaign` to a horizon worksheet and name the two mode routes in `route_modes`.
+Supply both routes in every period with their own capacities, assay windows and recovery
+assumptions. Declare the opening `initial_mode` and a nominal `switch_cost` in the worksheet
+currency. Only one mode can receive ore in each period. A change pays its cost at the receiving
+period's discount, including a change before the first period or into an idle period.
+
+```bash
+cargo run -p fmine-cli -- plan blend \
+  --input tests/planning/route_blend_campaign.json --format markdown
+```
+
+The synthetic circuit switches alkaline → acid → alkaline, carries high-carbonate feed across
+week two, and earns **USD 568** after discounted changeover costs. A quoted increase in week-three
+acid capacity changes the schedule to alkaline → alkaline → acid. Gross discounted contribution
+stays at **USD 620**, while changeover costs fall from **USD 52** to **USD 20**. The increase is
+worth **USD 32** before the quote and **USD 22** after it. The optimizer checks every mode sequence
+and breaks exact value ties by fewer changes, then by the declared mode order. It assumes a
+changeover fits between periods.
+
 ### Generate and check production schedules with destination splits
 
 `plan schedule` makes the existing PCPSP scheduling and bound solvers available through the CLI.
