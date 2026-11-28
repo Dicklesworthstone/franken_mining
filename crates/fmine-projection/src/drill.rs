@@ -36,13 +36,12 @@
 //!   with its message, and the batch is applied again without it; a text load that fails in
 //!   [`DrillStore::rebuild_indexes`] does the same. Ingest and [`DrillStore::bbox`] go on, and [`DrillStore::text`]
 //!   refuses until a rebuild loads the text index.
-//! - **The text index's limit.** Undoing a failed FTS5 statement removes its documents one by one, at a cost that
-//!   grows with the index: a single-statement load of 10⁷ intervals was still undoing itself 19 minutes into the
-//!   index load, when the run was stopped. And a `MATCH` costs time in proportion to the index (0.67 s for 100
-//!   hits at 10⁶ rows). So the store keeps a text index for at most [`TEXT_INDEX_MAX_ROWS`] intervals (10⁵, where
-//!   it was measured to load and to answer a 100-hit query in 59 ms), loads it in statements of 10,000 rows, and
-//!   past the limit withholds it ([`IndexState::Withheld`]): `text` refuses and names INT-FSEARCH-001, which serves
-//!   text at campaign scale.
+//! - **The text index's limit.** Undoing a failed FTS5 statement removes its documents one by one: a
+//!   single-statement load of 10⁷ intervals was still undoing itself 19 minutes into the index load, when the run
+//!   was stopped. And a `MATCH` costs time in proportion to the index (0.67 s for 100 hits at 10⁶ rows). So the
+//!   store keeps a text index for at most [`TEXT_INDEX_MAX_ROWS`] intervals (10⁵, where it was measured to load
+//!   and to answer a 100-hit query in 59 ms), loads it in statements of 10,000 rows, and past the limit withholds
+//!   it ([`IndexState::Withheld`]): `text` refuses and names INT-FSEARCH-001, which serves text at campaign scale.
 //!
 //! The store is read and written through `fsqlite::blocking::Connection` only (INT-FSQL-001 criterion 10).
 
