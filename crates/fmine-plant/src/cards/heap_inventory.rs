@@ -20,6 +20,8 @@ const MAX_LIFTS: usize = 64;
 const MAX_SCENARIOS: usize = 256;
 const NS_PER_DAY: f64 = 86_400_000_000_000.0;
 
+pub mod panel;
+
 /// Cumulative fraction mobilized since irrigation started. The declared
 /// error is Gaussian on this fraction. Observations across lifts are assumed
 /// conditionally independent within a scenario.
@@ -192,6 +194,50 @@ fn debits(id: &str, lift: &HeapLift, as_of_ns: i64) -> Result<ExactQty> {
     Ok(debit)
 }
 
+#[derive(Clone, Copy)]
+struct GaussianObservation {
+    value: f64,
+    sd: f64,
+}
+
+struct FeasibleScenario {
+    balances: BTreeMap<String, ExactQty>,
+    total: ExactQty,
+    weight: u32,
+    predictions: Vec<f64>,
+}
+
+fn log_odds(
+    candidate: &FeasibleScenario,
+    reference: &FeasibleScenario,
+    evidence: &[GaussianObservation],
+) -> f64 {
+    // Compare Gaussian losses directly. Forming absolute squared residual sums
+    // can erase a finite prior or another observation before subtraction.
+    let (mut sum, mut correction) = (
+        det::ln(f64::from(candidate.weight) / f64::from(reference.weight)),
+        0.0,
+    );
+    for ((&predicted, &baseline), obs) in candidate
+        .predictions
+        .iter()
+        .zip(&reference.predictions)
+        .zip(evidence)
+    {
+        let term = 0.5
+            * ((predicted - baseline) / obs.sd)
+            * (((obs.value - predicted) + (obs.value - baseline)) / obs.sd);
+        let next = sum + term;
+        correction += if sum.abs() >= term.abs() {
+            (sum - next) + term
+        } else {
+            (term - next) + sum
+        };
+        sum = next;
+    }
+    sum + correction
+}
+
 /// Update a joint scenario population with leach observations, then deduct the
 /// recorded metal debits from ultimate recoverable kg. Impossible scenarios
 /// retain their identity with zero posterior mass. The input Claim binds all
@@ -200,6 +246,17 @@ pub fn estimate_heap_inventory(
     input: &Claim<HeapInventoryInput>,
 ) -> Result<Claim<HeapInventoryEstimate>> {
     let value = &input.value;
+    validate_population(value)?;
+    inventory::admit_source(
+        input,
+        INPUT_METRIC,
+        &value.canonical_tag(),
+        AdditivityClass::NonAdditive,
+    )?;
+    estimate_population(value, input, &[], |_, _, _| Ok(()))
+}
+
+fn validate_population(value: &HeapInventoryInput) -> Result<()> {
     if !named(&value.pad)
         || !named(&value.element)
         || !(1..=MAX_LIFTS).contains(&value.lifts.len())
@@ -213,12 +270,15 @@ pub fn estimate_heap_inventory(
             "heap inventory requires a named pad and element and a bounded complete joint lift population",
         ));
     }
-    inventory::admit_source(
-        input,
-        INPUT_METRIC,
-        &value.canonical_tag(),
-        AdditivityClass::NonAdditive,
-    )?;
+    Ok(())
+}
+
+fn estimate_population<T>(
+    value: &HeapInventoryInput,
+    input: &Claim<T>,
+    supplemental_evidence: &[GaussianObservation],
+    append_predictions: impl Fn(&str, &HeapScenario, &mut Vec<f64>) -> Result<()>,
+) -> Result<Claim<HeapInventoryEstimate>> {
     let mut metadata = Metadata::new();
     metadata.include(input)?;
     let debits = value
@@ -226,6 +286,19 @@ pub fn estimate_heap_inventory(
         .iter()
         .map(|(id, lift)| debits(id, lift, value.as_of_ns).map(|debit| (id, debit)))
         .collect::<Result<BTreeMap<_, _>>>()?;
+    let evidence: Vec<_> = value
+        .lifts
+        .values()
+        .filter_map(|lift| {
+            lift.observation
+                .as_ref()
+                .map(|observation| GaussianObservation {
+                    value: observation.cumulative_fraction.to_f64(),
+                    sd: observation.standard_deviation.to_f64(),
+                })
+        })
+        .chain(supplemental_evidence.iter().copied())
+        .collect();
 
     let mut evaluated = Vec::with_capacity(value.scenarios.len());
     for (id, scenario) in &value.scenarios {
@@ -234,7 +307,7 @@ pub fn estimate_heap_inventory(
                 "scenario {id:?} requires positive weight and exactly one curve per lift"
             )));
         }
-        let mut score = det::ln(f64::from(scenario.weight));
+        let mut predictions = Vec::with_capacity(evidence.len());
         let mut remaining = BTreeMap::new();
         for ((lift_id, lift), curve) in value.lifts.iter().zip(scenario.curves.values()) {
             if !is_fraction(curve.ultimate_fraction) || curve.rate_per_day.signum() <= 0 {
@@ -254,9 +327,7 @@ pub fn estimate_heap_inventory(
                     / NS_PER_DAY;
                 let fraction = -curve.ultimate_fraction.to_f64()
                     * det::expm1(-curve.rate_per_day.to_f64() * days);
-                let residual =
-                    (obs.cumulative_fraction.to_f64() - fraction) / obs.standard_deviation.to_f64();
-                score -= 0.5 * residual * residual;
+                predictions.push(fraction);
             }
         }
         let feasible = if remaining.values().all(|mass| mass.signum() >= 0) {
@@ -264,38 +335,60 @@ pub fn estimate_heap_inventory(
                 .values()
                 .try_fold(ExactQty::from_integer(0), |sum, &kg| sum.checked_add(kg))
                 .map_err(arithmetic)?;
-            Some((remaining, total))
+            append_predictions(id, scenario, &mut predictions)?;
+            Some(FeasibleScenario {
+                balances: remaining,
+                total,
+                weight: scenario.weight,
+                predictions,
+            })
         } else {
             None
         };
-        evaluated.push((id, feasible, score));
+        evaluated.push((id, feasible));
     }
-    let max_score = evaluated
+    let reference = evaluated
         .iter()
-        .filter(|(_, balance, _)| balance.is_some())
-        .map(|(_, _, score)| *score)
-        .max_by(f64::total_cmp)
+        .filter_map(|(_, balance)| balance.as_ref())
+        .reduce(|current, candidate| {
+            if log_odds(candidate, current, &evidence) > 0.0 {
+                candidate
+            } else {
+                current
+            }
+        })
         .ok_or_else(|| {
             Refusal::new(
                 RefusalCode::NotObservable202,
                 "no heap scenario can cover the recorded metal debits",
             )
         })?;
-    let scaled = |score: f64| det::exp(score - max_score);
-    let normalizer: f64 = evaluated
+    let relative_log_weights: Vec<_> = evaluated
         .iter()
-        .filter(|(_, balance, _)| balance.is_some())
-        .map(|(_, _, score)| scaled(*score))
-        .sum();
+        .map(|(_, balance)| {
+            balance.as_ref().map_or(f64::NEG_INFINITY, |candidate| {
+                log_odds(candidate, reference, &evidence)
+            })
+        })
+        .collect();
+    let max_score = relative_log_weights.iter().copied().fold(0.0_f64, f64::max);
+    let relative_weights: Vec<_> = relative_log_weights
+        .iter()
+        .map(|&score| det::exp(score - max_score))
+        .collect();
+    let normalizer: f64 = relative_weights.iter().sum();
     let mut totals = Vec::new();
     let mut members = BTreeMap::new();
-    let mut enc = Encoder::new_frame(*b"HPRC", 1);
+    let mut enc = Encoder::new_frame(*b"HPRC", 2);
     inventory::put_source_envelope(&mut enc, input, 1);
-    for (id, balance, score) in evaluated {
+    for ((id, balance), weight) in evaluated.into_iter().zip(relative_weights) {
         enc.put_str(id);
         enc.put_u8(u8::from(balance.is_some()));
-        let (balances, probability) = if let Some((balances, total)) = balance {
-            let probability = scaled(score) / normalizer;
+        let (balances, probability) = if let Some(FeasibleScenario {
+            balances, total, ..
+        }) = balance
+        {
+            let probability = weight / normalizer;
             totals.push((total.to_f64(), probability));
             put_exact(&mut enc, total);
             (Some(balances), probability)
@@ -336,11 +429,7 @@ pub fn estimate_heap_inventory(
         pad: value.pad.clone(),
         element: value.element.clone(),
         as_of_ns: value.as_of_ns,
-        observation_count: value
-            .lifts
-            .values()
-            .filter(|lift| lift.observation.is_some())
-            .count(),
+        observation_count: evidence.len(),
         members,
         mean_kg: Kilograms::new(mean),
         p10_kg: Kilograms::new(p10),
@@ -379,7 +468,7 @@ mod tests {
 
     const DAY: i64 = 86_400_000_000_000;
 
-    fn qty(text: &str) -> ExactQty {
+    pub(super) fn qty(text: &str) -> ExactQty {
         ExactQty::from_decimal_str(text).unwrap()
     }
 
@@ -407,7 +496,7 @@ mod tests {
         }
     }
 
-    fn request() -> HeapInventoryInput {
+    pub(super) fn request() -> HeapInventoryInput {
         HeapInventoryInput {
             pad: "synthetic-pad".into(),
             element: "Au".into(),
@@ -485,6 +574,35 @@ mod tests {
         assert_eq!(posterior.state, KnowledgeState::Estimated);
         assert_eq!(posterior.evidence, EvidenceClass::Assumed);
         assert_eq!(posterior, estimate_heap_inventory(&input).unwrap());
+    }
+
+    #[test]
+    fn test_heap_common_likelihood_preserves_prior_odds_and_other_observations() {
+        let mut request = request();
+        let favorable = request.scenarios.get_mut("north-favorable").unwrap();
+        favorable.weight = 3;
+        let shared_south = favorable.curves["south"].clone();
+        request
+            .scenarios
+            .get_mut("south-favorable")
+            .unwrap()
+            .curves
+            .insert("south".into(), shared_south);
+        let observation = |fraction, sigma| LeachObservation {
+            observed_at_ns: DAY,
+            available_at_ns: 2 * DAY,
+            cumulative_fraction: qty(fraction),
+            standard_deviation: qty(sigma),
+        };
+        request.lifts.get_mut("south").unwrap().observation = Some(observation("0.9", "1e-12"));
+        let estimate = estimate_heap_inventory(&source(request.clone())).unwrap();
+        let weight = |claim: &Claim<HeapInventoryEstimate>| {
+            claim.value.members["north-favorable"].weight.value()
+        };
+        assert!((weight(&estimate) - 0.75).abs() < 1e-12);
+        request.lifts.get_mut("north").unwrap().observation = Some(observation("0.35", "0.025"));
+        let conditioned = estimate_heap_inventory(&source(request)).unwrap();
+        assert!((weight(&conditioned) - 3.0 / (3.0 + (-8.0_f64).exp())).abs() < 1e-12);
     }
 
     #[test]

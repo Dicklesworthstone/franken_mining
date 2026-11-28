@@ -1126,5 +1126,19 @@ Ultimate recoverable kg minus exact recovered and lost kg gives each lift's rema
 scenario that cannot cover a lift's debits keeps its identity with zero weight. An empty feasible
 population refuses. Quantiles use the joint pad totals and therefore retain dependencies between lifts.
 The calculation preserves source evidence and confidentiality and reports an Estimated Claim without
-calibration. Panel-level flow and grade assimilation, book roll-forward and field validation have separate
-work under BD-183, BD-290 and BD-264, respectively.
+calibration. Gaussian log odds compare predictions directly and preserve prior odds when scenarios
+share a likelihood term. Book roll-forward and field validation remain BD-290 and BD-264.
+
+`cards::heap_inventory::panel::estimate_heap_inventory_from_panels` (DESIGN, BD-183) accepts a
+complete partition of the lift masses and one optional matched interval of pregnant and entering
+barren solution flow and grade per panel. The estimator subtracts entering metal from collected
+metal in exact milligrams and converts the difference to kilograms. The supplied standard deviation is for
+this net quantity and measurement errors are assumed independent. A lift with panel evidence cannot
+also use its aggregate leach observation.
+
+Each joint scenario names a fast-path share and mobile-water fraction per panel. The remaining share
+arrives after the integrated application flux covers drainage depth times mobile-water fraction. The
+likelihood maps both measurement boundaries backward through the declared positive, piecewise-constant
+application history and integrates the first-order curve on that mobilization interval. Recorded lift
+recoveries and losses determine the inventory debits. This model assumes uninterrupted irrigation and
+a matched background solution balance over each measured interval.
