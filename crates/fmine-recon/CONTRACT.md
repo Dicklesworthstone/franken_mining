@@ -7,7 +7,7 @@ Touchstone reconciliation kernel (`BD-149`, `BD-150`, `BD-151`, `BD-152`, `BD-15
 - **Layer:** K2
 - **Subsystem:** Touchstone
 - **LOC budget:** 18,000 planned / 21,000 ceiling
-- **Allowed Module Families:** `["bias", "bilinear", "certificate", "error", "gross_error", "identifiability", "linear", "stats"]`
+- **Allowed Module Families:** `["bias", "bilinear", "certificate", "error", "gross_error", "identifiability", "linear", "stats", "stockpile"]`
 
 ## 2. Inputs
 - Validated `fmine_flow::graph::FlowGraph` topologies and typed domain requests (`LinearFlowRequest`, `NamedLinearRequest`, `PartialFlowRequest`, `BiasIdentifiabilityRequest`, `GrossErrorPolicy`, `BiasVectorSpec`, `BilinearFlowRequest`, `DirectGradeReconciliationAttempt`, `HierarchicalBiasRequest`, `PosteriorSampleRequest`, `FactorMultiplierAttempt`, `IdentifiabilityRequest`, `MeasurementVoiRequest`, `ReconciliationCertificateRequest`).
@@ -63,8 +63,8 @@ Derived state estimates, hierarchical bias posteriors, and statistical gross-err
 - `FMT-CERT-1` offline round-trip & single-bit tamper exit-8 verification via `fmine-verify` (`BD-156`).
 
 ## 10. Known gaps
-- R2 multi-period dynamic stockpile voxel/Kalman state-space smoothing (`BD-154`, `BD-312`) and rolling-origin hindcast CLI (`BD-161`, `BD-162`) remain in subsequent Touchstone beads.
-- Public reconciliation table known answers (`GATE-TOUCH-06`, `BD-281`) and live site pilot parity (`GATE-TOUCH-03`, `BD-206`) remain downstream.
+- 3D voxel/lift-parcel stockpile provenance (`BD-312`, `StockpileVoxelTwin`) and rolling-origin hindcast CLI (`BD-161`) remain in downstream Touchstone beads.
+- Live site pilot parity (`GATE-TOUCH-03`, `BD-206`) remains downstream.
 
 ## 11. Public API
 - `ReconError` (`error::ReconError`)
@@ -73,7 +73,8 @@ Derived state estimates, hierarchical bias posteriors, and statistical gross-err
 - `bilinear::{GradeValue, ObservedScalar, ObservedGrade, BilinearObsRef, BilinearObsCorrelation, BilinearStreamObservation, BilinearFlowRequest, ReconciledGrade, ReconciledStreamState, NodeElementRecovery, BilinearReconResult, reconcile_bilinear_flow}`
 - `bias::{MAX_HIERARCHICAL_PARAMS, BiasTargetKind, MiningSourceKind, FactorMultiplierAttempt, refuse_factor_multiplier_application, HierarchicalGroupPrior, StandaloneNodePrior, NodeBiasSpec, BiasObservation, HierarchicalBiasRequest, HierarchicalPosteriorSummary, BiasUpdateEvent, HierarchicalBiasResult, PosteriorSampleRequest, HierarchicalPosteriorDraws, fit_hierarchical_bias_posteriors, sample_hierarchical_posterior}`
 - `identifiability::{CandidateMeasurementKind, IdentifiabilityRequest, DeterminedContrastBasis, ParameterIdentifiability, ConfoundedBiasPair, IdentifiabilityReport, CandidateMeasurement, MeasurementVoiRequest, MeasurementVoiScore, analyze_identifiability, analyze_hierarchical_identifiability, require_full_identifiability, require_parameter_identifiable, evaluate_measurement_voi}`
-- `certificate::{TAG_RECON_CERT, FMT_RECON_CERT_V1, RECON_CERT_SUBJECT_KIND, ParityDifferenceStatus, ParityExplanation, NodeBalanceRecord, BalanceCertificateSummary, CertifiedFactorInterval, CertifiedQuantityInterval, PosteriorCertificateSummary, RefusedPairVoiRecord, IdentifiabilityCertificateSummary, RegisteredForecastScore, AttestationStatus, ReconciliationCertificateRequest, ReconciliationCertificate}`
+- `certificate::{TAG_RECON_CERT, FMT_RECON_CERT_V1, RECON_CERT_SUBJECT_KIND, MAX_CERT_STR_BYTES, MAX_CERT_ITEMS, ParityDifferenceStatus, ParityExplanation, NodeBalanceRecord, BalanceCertificateSummary, CertifiedFactorInterval, CertifiedQuantityInterval, PosteriorCertificateSummary, RefusedPairVoiRecord, IdentifiabilityCertificateSummary, RegisteredForecastScore, AttestationStatus, ReconciliationCertificateRequest, ReconciliationCertificate}`
+- `stockpile::{GRAMS_PER_TROY_OZ, MAX_STOCKPILE_PERIODS, StockpileStatePrior, StockpileObservation, StockpileFlowStep, StockpileStateSpaceRequest, StockpilePeriodEstimate, StockpilePeriodDelta, StockpileTrajectoryPosterior, BatchGaussianStockpileSolution, run_stockpile_kalman_smoother, solve_batch_gaussian_stockpile, StockpileParcel, ReclaimObservation, MixingComparisonRequest, MixingModelScore, MixingModelComparison, compare_mixing_models, SulfurDegradationCard, MetallurgicalStateRequest, StockpileMetallurgicalState, evaluate_stockpile_metallurgical_state, StockpileAdditionInferenceRequest, StockpileAdditionInference, infer_stockpile_additions_and_cone}`
 
 ## 12. Proof obligations
 - `BD-149`, `PO-TOUCH-1`, `PO-TOUCH-2`, `G-TOUCH-1`, `G-TOUCH-2`, `G-TOUCH-3` (`tests/recon_known_answers.rs`):
@@ -97,5 +98,12 @@ Derived state estimates, hierarchical bias posteriors, and statistical gross-err
 - `BD-158`, `BD-159`, `GATE-TOUCH-02`, `PO-TOUCH-5`, `PO-TOUCH-6` (`crates/fmine-verify/tests/gate_touch_02.rs`):
   - `gate_touch_02::test_gate_touch_02_bias_recovery_sbc_identifiability_and_5pct_power`
   - `gate_touch_02::test_bd156_reconciliation_certificate_fmine_verify_roundtrip_and_tamper`
+- `BD-154`, `PO-TOUCH-3` (`tests/stockpile_known_answers.rs`):
+  - `stockpile_known_answers::test_po_touch_3_kalman_rts_smoother_equals_batch_gaussian_posterior`
+  - `stockpile_known_answers::test_bd154_volumetric_survey_resets_tonnage_sd_without_collapsing_grade_sd`
+  - `stockpile_known_answers::test_bd154_mixing_model_predictive_comparison_and_sulfide_degradation`
+  - `stockpile_known_answers::test_bd154_pueblo_viejo_2025_additions_and_cone_inference`
+- `BD-281`, `GATE-TOUCH-06` (`crates/fmine-verify/tests/gate_touch_06.rs`):
+  - `gate_touch_06::test_gate_touch_06_kibali_pueblo_viejo_and_porgera_public_known_answers`
 - `BD-261`, `KILL-PLUMB-6` (`crates/fmine-verify/tests/kill_plumb_6.rs`):
   - `kill_plumb_6::test_kill_plumb_6_control_mine_quarterly_false_alarm_rate_and_shift_power`

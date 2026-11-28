@@ -26,5 +26,6 @@ pub mod gross_error;
 pub mod identifiability;
 pub mod linear;
 mod stats;
+pub mod stockpile;
 
 pub use error::ReconError;
