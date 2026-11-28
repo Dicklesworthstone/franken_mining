@@ -36,7 +36,7 @@ Strata variography (`BD-237`, plan §13, WP-16), the first slice of the geostati
 ## 5. Refusals
 - `GeostatError::Invalid` → `FMINE-REF-109`: an empty CRS or domain, no holes, a hole named twice, a sample of a hole not named, a non-finite coordinate or value, more samples than `MAX_SAMPLES`; lags or directions outside their domains, no directions or more than 64, points spread over more than 10⁹ times the farthest lag; a model parameter outside its domain or more than four structures; a fit with no nugget and no structures, a fixed or initial range that is not positive and finite, an initial free range outside the search, a lag with no pairs or a non-finite or negative value, or an anisotropic structure fitted to an omnidirectional variogram.
 - `GeostatError::CrsMismatch` → `FMINE-REF-106`: traces in more than one CRS.
-- `GeostatError::NotObservable` → `FMINE-REF-202`: a censored composite under `Censored::Refuse`; a fit with fewer lags than parameters, a free range the directions do not determine, or a range that runs to the edge of the search.
+- `GeostatError::NotObservable` → `FMINE-REF-202`: a censored composite under `Censored::Refuse`; a fit with no lags or fewer lags than parameters, a free range the directions do not determine, or a range that runs to the edge of the search.
 - `GeostatError::NoConvergence` → `FMINE-REF-207`: the range search spent `MAX_EVALUATIONS` (200,000) objective evaluations, or was still improving after 20 restarts (`error::tests::test_each_error_names_its_registered_refusal`).
 
 ## 6. Determinism class

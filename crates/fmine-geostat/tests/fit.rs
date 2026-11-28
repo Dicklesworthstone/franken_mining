@@ -433,6 +433,17 @@ fn test_fits_the_lags_cannot_support_are_refused() {
     let e = fit(&short, &one(RangeSpec::Isotropic(Range::Free(50.0)))).unwrap_err();
     assert_eq!(code(&e), "FMINE-REF-202", "{e:?}");
 
+    // No lags at all.
+    let empty = [Experimental {
+        direction: Direction::OMNIDIRECTIONAL,
+        lags: Vec::new(),
+    }];
+    let e = fit(&empty, &one(RangeSpec::Isotropic(Range::Free(50.0)))).unwrap_err();
+    assert!(
+        matches!(&e, GeostatError::NotObservable { detail } if detail.contains("no lags")),
+        "{e:?}"
+    );
+
     // A variogram still rising linearly at 200 m: a spherical range runs to the edge of the search.
     let linear = [Experimental {
         direction: Direction::OMNIDIRECTIONAL,

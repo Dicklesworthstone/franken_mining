@@ -371,7 +371,7 @@ impl Search<'_, '_> {
 /// - [`GeostatError::Invalid`]: no nugget and no structures, more than [`MAX_STRUCTURES`], a range that is not
 ///   positive and finite or a free one outside the search, a lag with no pairs or a non-finite value, or an
 ///   anisotropic structure fitted to an omnidirectional variogram.
-/// - [`GeostatError::NotObservable`]: what the lags cannot determine (module documentation).
+/// - [`GeostatError::NotObservable`]: no lags, or what the lags cannot determine (module documentation).
 /// - [`GeostatError::NoConvergence`]: the range search did not converge in [`MAX_EVALUATIONS`] evaluations or
 ///   was still improving after its restarts.
 pub fn fit(variograms: &[Experimental], spec: &Spec) -> Result<Fit, GeostatError> {
@@ -506,8 +506,13 @@ fn problem<'a>(variograms: &[Experimental], spec: &'a Spec) -> Result<Problem<'a
             });
         }
     }
+    if points.is_empty() {
+        return Err(GeostatError::not_observable(
+            "no lags to fit: every variogram is empty",
+        ));
+    }
     let total: f64 = points.iter().map(|p| p.weight).sum();
-    let mean = total / points.len().max(1) as f64;
+    let mean = total / points.len() as f64;
     for p in &mut points {
         p.weight /= mean;
     }
