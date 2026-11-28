@@ -1669,7 +1669,9 @@ mod tests {
         // bd-149 adds fmine-recon's error and stats modules.
         // BD-121 adds the interval box bound (fmine-projection::drill::boxes).
         // BD-237 adds fmine-geostat's six modules: lib, error, samples, experimental, model and fit.
-        assert_eq!(report.bitwise_files, 177, "{report:?}");
+        // FACT (53c7c86e, d0ca6345): fmine-cli adds drill_quality, its blanks and duplicates
+        // modules, and drill_censored. The count covers src/ and excludes integration tests.
+        assert_eq!(report.bitwise_files, 181, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.
