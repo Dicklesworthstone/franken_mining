@@ -1114,3 +1114,17 @@ or real-plant validation is claimed. The synthetic fixture has independent fit D
 - `cards::cu_speciation` (`BitwisePortable`, zero bare `f64`): speciation-weighted Cu heap/dump transfer card `TCu_rec = F1·ASCu/TCu + F2·CNCu/TCu + F3_eff·SCu/TCu` (Zaldívar `96/78/40` `E289`, `55%` insoluble-Cu cap `E290`), enforcing processing-support (`G-CRUC-2`, `FMINE-REF-102`), validity-box bounds (`G-CRUC-1`, `FMINE-REF-203`), and explicit priced-UU extrapolation (`FMINE-REF-204`).
 - `cards::preg_rob` (`BitwisePortable`, zero bare `f64`): gold-adsorption spike-test preg-robbing card enforcing strict `< 40%` / `< 60%` source feed caps (`E173`/`E175`), optional Raman `CarbonType` covariate, `InputUnit::SpikeTestPercent` (`FMINE-REF-107`), and `render_preg_rob_validity_table`.
 - `cards::calibration` (`BitwisePortable`, zero bare `f64`, `BD-289`, `FACT E177`): deterministic lab-vs-plant recovery calibration card (`RecoveryCalibrationCard`, `parse_markdown_lab_vs_plant_table`, `build_recovery_calibration_card`) computing exact rational mean bias, unbiased sample variance, `10^-6`-scaled exact integer-sqrt SD, asymmetric outlier counts (`> +5` / `< -5` pts), printed-diff rounding checks, strictly causal expanding-window coverage (`0..t -> t`), and `RecoveryCalibrationFlag` auto-classification (with synthetic CI proofs and an ignored real-file test reproducing Turquoise Ridge's 71 monthly BTAC-vs-plant lots + 12 missing lots from Table 13-2).
+
+`cards::heap_inventory::estimate_heap_inventory` (DESIGN, BD-183, §20.8, GB-20) returns a conditional
+recoverable-inventory Claim for one pad, element and as-of cut. Submit the complete lift population,
+exact contained, recovered and lost metal kg, and positive relative weights for joint scenarios with one
+ultimate-recovery fraction and first-order rate per day for every lift. Each lift may supply one cumulative
+leach-curve observation and its standard deviation in fraction units. The observation must be available
+at the cut. The likelihood assumes independent Gaussian measurement error on the admitted fractions.
+
+Ultimate recoverable kg minus exact recovered and lost kg gives each lift's remaining inventory. A
+scenario that cannot cover a lift's debits keeps its identity with zero weight. An empty feasible
+population refuses. Quantiles use the joint pad totals and therefore retain dependencies between lifts.
+The calculation preserves source evidence and confidentiality and reports an Estimated Claim without
+calibration. Panel-level flow and grade assimilation, book roll-forward and field validation have separate
+work under BD-183, BD-290 and BD-264, respectively.

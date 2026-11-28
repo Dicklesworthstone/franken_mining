@@ -21,6 +21,7 @@ pub mod cu_speciation;
 pub mod ensemble;
 pub mod fit;
 mod formula;
+pub mod heap_inventory;
 pub mod preg_rob;
 #[cfg(test)]
 mod tests;
