@@ -1339,3 +1339,115 @@ fn test_a_text_index_past_its_limit_is_withheld_and_the_rest_goes_on() {
         "deferred, rebuilt past the limit",
     );
 }
+
+/// Two versions of one interval in one batch, which a ledger committed without `drill_law` can hold: the store
+/// applies them in order. The interval is added on one hole and relogged onto another with new text; it ends with
+/// the second version's row, box and text, two versions, and (indexes kept current) the first text as garbage.
+#[test]
+fn test_two_versions_of_an_interval_in_one_batch_apply_in_order() {
+    let mut rng = Rng(9);
+    let mut ledger = L0Ledger::new();
+    let lease = ledger.create_cell(CELL, "node-1").unwrap();
+    let mut first = Vec::new();
+    for h in 0..2 {
+        first.push(DrillRecord::Collar(collar(h, &mut rng)));
+        for k in 0..STATIONS {
+            first.push(DrillRecord::Survey(Survey {
+                depth_mm: 25_000 * k as u64,
+                ..survey(h, k, &mut rng)
+            }));
+        }
+    }
+    let changes: Vec<Change> = first.iter().cloned().map(Change::Put).collect();
+    commit(&mut ledger, &lease, &changes).unwrap();
+    let mut held: BTreeMap<String, Held> = first
+        .into_iter()
+        .map(|record| {
+            let key = record_key(record.kind(), record.id());
+            let version = RecordVersion {
+                record,
+                correction: None,
+            };
+            (
+                key,
+                Held {
+                    version,
+                    versions: 1,
+                    seq: 0,
+                },
+            )
+        })
+        .collect();
+
+    let v1 = Interval {
+        mineralization: "firstpass".to_string(),
+        ..interval(3, 0, &mut rng)
+    };
+    let v2 = Interval {
+        mineralization: "secondpass".to_string(),
+        ..interval(3, 1, &mut rng)
+    };
+    assert_eq!(v1.interval_id, v2.interval_id);
+    let key = record_key(RecordKind::Interval, &v1.interval_id);
+    let reason = "relogged in the same batch";
+    let ops = vec![
+        DeltaOp::new(
+            key.clone(),
+            DeltaKind::Supersede,
+            fmine_drill::records::encode_version(&DrillRecord::Interval(v2.clone()), Some(reason))
+                .unwrap(),
+        ),
+        DeltaOp::new(
+            key.clone(),
+            DeltaKind::Put,
+            fmine_drill::records::encode_version(&DrillRecord::Interval(v1), None).unwrap(),
+        ),
+    ];
+    let batch = fmine_drill::store::batch_for(&ledger, CELL, lease.epoch, ops).unwrap();
+    assert_eq!(
+        batch.deltas[0].kind,
+        DeltaKind::Put,
+        "the put applies first"
+    );
+    ledger.commit(&lease, batch).unwrap();
+    held.insert(
+        key,
+        Held {
+            version: RecordVersion {
+                record: DrillRecord::Interval(v2),
+                correction: Some(reason.to_string()),
+            },
+            versions: 2,
+            seq: 1,
+        },
+    );
+    let want = expected(&held);
+    assert_eq!(want.intervals.len(), 1);
+    assert!(want.intervals[0].located.is_some(), "hole 1 has a trace");
+
+    let batches = ledger.batches(CELL).unwrap();
+    for defer in [false, true] {
+        let context = format!("indexes deferred: {defer}");
+        let mut store = DrillStore::open_in_memory().unwrap();
+        store.defer_indexes(defer);
+        let mut projection = Projection::open(store).unwrap();
+        projection.catch_up(batches).unwrap();
+        let mut store = projection.into_projector();
+        if defer {
+            store.rebuild_indexes().unwrap();
+        }
+        assert_holds(&store, &want, &context);
+        assert_bbox_answers(&store, &want, &queries(&want, &mut rng), &context);
+        assert_text_answers(&store, &want, &context);
+        assert!(store.text("firstpass").unwrap().is_empty(), "{context}");
+        assert_eq!(store.text("secondpass").unwrap().len(), 1, "{context}");
+        assert_eq!(
+            store.index_garbage(),
+            IndexGarbage {
+                stale_boxes: 0,
+                stale_texts: u64::from(!defer)
+            },
+            "{context}"
+        );
+    }
+}

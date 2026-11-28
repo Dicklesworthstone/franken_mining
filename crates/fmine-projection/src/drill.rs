@@ -69,6 +69,8 @@ pub const SCHEMA: &str = "fmine.projection.drill.v2";
 pub const RTREE_ROWS_PER_STATEMENT: usize = 4096;
 /// The most rows one FTS5 insert writes (two parameters each).
 const TEXT_ROWS_PER_STATEMENT: usize = 512;
+/// The most new interval rows one insert writes (sixteen parameters each; fsqlite takes up to 32,766).
+const INTERVAL_ROWS_PER_STATEMENT: usize = 256;
 /// The most intervals the store keeps a text index for, by default (module documentation).
 pub const TEXT_INDEX_MAX_ROWS: u64 = 100_000;
 /// The most rows one statement of a text-index load writes: a failed statement is undone document by document.
@@ -397,6 +399,26 @@ struct Span {
     to_mm: u64,
     /// `None` for an interval new in this batch.
     prior: Option<Prior>,
+}
+
+/// An interval new in this batch. Its row is written once, with its box, after the batch's traces are known.
+struct NewInterval {
+    rid: i64,
+    tid: i64,
+    hole_id: String,
+    from_mm: i64,
+    to_mm: i64,
+    body: String,
+}
+
+/// A new interval's row as written: its box, if its hole has a trace, and its R-tree id.
+struct NewRow<'a> {
+    interval_id: &'a str,
+    new: &'a NewInterval,
+    bid: Option<i64>,
+    crs: Option<String>,
+    /// `min_e, max_e, min_n, max_n, min_z, max_z`.
+    bounds: [Option<f64>; 6],
 }
 
 /// What writing an interval's row gives back.
@@ -1093,7 +1115,40 @@ impl DrillStore {
     }
 
     /// Write `iv`'s row (not its box).
-    fn upsert_interval(&mut self, cell: &str, iv: &Interval) -> Result<Upserted, DrillStoreError> {
+    /// Write `iv`'s row: supersede it in place if the store holds it, change it in `fresh` if this batch added it,
+    /// and otherwise add it to `fresh`, whose rows [`DrillStore::locate`] writes with their boxes.
+    fn upsert_interval(
+        &mut self,
+        cell: &str,
+        iv: &Interval,
+        fresh: &mut BTreeMap<String, NewInterval>,
+    ) -> Result<Upserted, DrillStoreError> {
+        let (from, to, text) = (
+            int("from_mm", iv.from_mm)?,
+            int("to_mm", iv.to_mm)?,
+            body(iv),
+        );
+        if let Some(new) = fresh.get_mut(&iv.interval_id) {
+            // Added earlier in this batch, so it had no box before it.
+            let new_text = if new.body == text {
+                None
+            } else {
+                new.tid = self.counters.next_tid;
+                self.counters.next_tid += 1;
+                self.counters.stale_texts += 1;
+                Some((new.tid, text.clone()))
+            };
+            new.hole_id.clone_from(&iv.hole_id);
+            (new.from_mm, new.to_mm, new.body) = (from, to, text);
+            return Ok(Upserted {
+                rid: new.rid,
+                prior: Some(Prior {
+                    bid: None,
+                    located: None,
+                }),
+                text: new_text,
+            });
+        }
         let prior = optional(
             self.conn
                 .prepare_cached(&format!(
@@ -1112,11 +1167,6 @@ impl DrillStore {
                 }),
         )
         .map_err(sql("read an interval's row"))?;
-        let (from, to, text) = (
-            int("from_mm", iv.from_mm)?,
-            int("to_mm", iv.to_mm)?,
-            body(iv),
-        );
         if let Some((rid, tid, old_text, prior)) = prior {
             let (tid, new_text) = if old_text == text {
                 (tid, None)
@@ -1139,14 +1189,19 @@ impl DrillStore {
             });
         }
         let (rid, tid) = (self.counters.next_rid, self.counters.next_tid);
-        self.exec_cached(
-            "insert an interval",
-            "INSERT INTO drill_interval(rid, cell_id, interval_id, hole_id, from_mm, to_mm, body, tid) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![rid, cell, iv.interval_id, iv.hole_id, from, to, text, tid],
-        )?;
         self.counters.next_rid += 1;
         self.counters.next_tid += 1;
+        fresh.insert(
+            iv.interval_id.clone(),
+            NewInterval {
+                rid,
+                tid,
+                hole_id: iv.hole_id.clone(),
+                from_mm: from,
+                to_mm: to,
+                body: text.clone(),
+            },
+        );
         Ok(Upserted {
             rid,
             prior: None,
@@ -1204,6 +1259,7 @@ impl DrillStore {
         let stale_texts = self.counters.stale_texts;
         let mut dirty_holes = BTreeSet::new();
         let mut spans: BTreeMap<i64, Span> = BTreeMap::new();
+        let mut fresh: BTreeMap<String, NewInterval> = BTreeMap::new();
         let mut texts: Vec<(i64, String)> = Vec::new();
         for op in &batch.deltas {
             if !op.key.starts_with(KEY_PREFIX) {
@@ -1254,7 +1310,8 @@ impl DrillStore {
                     dirty_holes.extend(prior_hole);
                 }
                 DrillRecord::Interval(iv) => {
-                    let Upserted { rid, prior, text } = self.upsert_interval(cell, iv)?;
+                    let Upserted { rid, prior, text } =
+                        self.upsert_interval(cell, iv, &mut fresh)?;
                     spans.insert(
                         rid,
                         Span {
@@ -1279,7 +1336,7 @@ impl DrillStore {
                 });
             }
         }
-        let boxes = self.locate(cell, &dirty_holes, &spans)?;
+        let boxes = self.locate(cell, &dirty_holes, &spans, &fresh)?;
         let states = self.index_states()?;
         if matches!(
             states.texts,
@@ -1344,14 +1401,20 @@ impl DrillStore {
             .collect()
     }
 
-    /// Compute the boxes of `spans`, write the ones that changed and the trace status of their holes; returns the
-    /// new boxes with their new R-tree ids.
+    /// Compute the boxes of `spans`, write the trace status of their holes, the rows of the intervals in `fresh` and
+    /// the boxes that changed; returns the new boxes with their new R-tree ids.
     fn locate(
         &mut self,
         cell: &str,
         dirty_holes: &BTreeSet<String>,
         spans: &BTreeMap<i64, Span>,
+        fresh: &BTreeMap<String, NewInterval>,
     ) -> Result<Vec<(i64, Box3)>, DrillStoreError> {
+        let fresh_by_rid: BTreeMap<i64, (&str, &NewInterval)> = fresh
+            .iter()
+            .map(|(id, new)| (new.rid, (id.as_str(), new)))
+            .collect();
+        let mut rows = Vec::with_capacity(fresh.len());
         let mut holes: BTreeSet<&str> = dirty_holes.iter().map(String::as_str).collect();
         holes.extend(spans.values().map(|s| s.hole_id.as_str()));
         let mut traces = BTreeMap::new();
@@ -1379,9 +1442,10 @@ impl DrillStore {
                         interval_box(t, span.from_mm, span.to_mm),
                     )
                 });
+            let new = fresh_by_rid.get(rid);
             let before = span.prior.as_ref().and_then(|p| p.located.clone());
-            // Unchanged, or new with no box: nothing to write.
-            if (span.prior.is_some() && before == now) || (span.prior.is_none() && now.is_none()) {
+            // A stored interval whose box is unchanged: nothing to write. (Only a new interval has no prior.)
+            if new.is_none() && before == now {
                 continue;
             }
             if span.prior.as_ref().is_some_and(|p| p.bid.is_some()) {
@@ -1397,6 +1461,26 @@ impl DrillStore {
                 None => (None, None, None),
             };
             let at = |c: Option<[f64; 3]>, k: usize| c.map(|v| v[k]);
+            if let Some(&(interval_id, new)) = new {
+                rows.push(NewRow {
+                    interval_id,
+                    new,
+                    bid,
+                    crs: crs.map(str::to_string),
+                    bounds: [
+                        at(lo, 0),
+                        at(hi, 0),
+                        at(lo, 1),
+                        at(hi, 1),
+                        at(lo, 2),
+                        at(hi, 2),
+                    ],
+                });
+                if let (Some(bid), Some((_, b))) = (bid, now) {
+                    boxes.push((bid, b));
+                }
+                continue;
+            }
             self.exec_cached(
                 "write an interval's box",
                 "UPDATE drill_interval SET bid = ?1, crs = ?2, min_e = ?3, max_e = ?4, min_n = ?5, max_n = ?6, \
@@ -1417,7 +1501,44 @@ impl DrillStore {
                 boxes.push((bid, b));
             }
         }
+        self.write_new_rows(cell, &rows)?;
         Ok(boxes)
+    }
+
+    /// Insert the rows of the intervals new in this batch, with their boxes, a few statements at a time.
+    fn write_new_rows(&self, cell: &str, rows: &[NewRow<'_>]) -> Result<(), DrillStoreError> {
+        const COLUMNS: usize = 16;
+        for chunk in rows.chunks(INTERVAL_ROWS_PER_STATEMENT) {
+            let mut text = String::from(
+                "INSERT INTO drill_interval(rid, cell_id, interval_id, hole_id, from_mm, to_mm, body, tid, bid, crs, \
+                 min_e, max_e, min_n, max_n, min_z, max_z) VALUES ",
+            );
+            let mut args: Vec<&dyn ToSql> = Vec::with_capacity(chunk.len() * COLUMNS);
+            for (i, row) in chunk.iter().enumerate() {
+                text.push_str(if i == 0 { "(" } else { ", (" });
+                for k in 0..COLUMNS {
+                    let sep = if k == 0 { "" } else { ", " };
+                    let _ = write!(text, "{sep}?{}", i * COLUMNS + k + 1);
+                }
+                text.push(')');
+                let n = row.new;
+                args.extend([
+                    &n.rid as &dyn ToSql,
+                    &cell,
+                    &row.interval_id,
+                    &n.hole_id,
+                    &n.from_mm,
+                    &n.to_mm,
+                    &n.body,
+                    &n.tid,
+                    &row.bid,
+                    &row.crs,
+                ]);
+                args.extend(row.bounds.iter().map(|v| v as &dyn ToSql));
+            }
+            self.exec_cached("insert new intervals", &text, args.as_slice())?;
+        }
+        Ok(())
     }
 
     /// Add `boxes` to the R-tree, a few statements at a time.
