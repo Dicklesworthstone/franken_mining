@@ -73,6 +73,8 @@ const TEXT_ROWS_PER_STATEMENT: usize = 512;
 const INTERVAL_ROWS_PER_STATEMENT: usize = 256;
 /// The most new record rows one insert writes (eight parameters each).
 const RECORD_ROWS_PER_STATEMENT: usize = 512;
+/// The most keys one lookup of a batch's stored records or intervals binds.
+const KEYS_PER_LOOKUP: usize = 512;
 /// The most intervals the store keeps a text index for, by default (module documentation).
 pub const TEXT_INDEX_MAX_ROWS: u64 = 100_000;
 /// The most rows one statement of a text-index load writes: a failed statement is undone document by document.
@@ -392,6 +394,35 @@ struct Prior {
     /// Its R-tree id; `None` when it had no box.
     bid: Option<i64>,
     located: Option<(String, Box3)>,
+}
+
+/// A stored interval as this batch found it: its row and text ids, its text and its box.
+struct StoredInterval {
+    rid: i64,
+    tid: i64,
+    body: String,
+    prior: Prior,
+}
+
+/// What the store held, before this batch, of the records and intervals the batch writes, read a few statements at a
+/// time. [`DrillStore::upsert_record`] and [`DrillStore::upsert_interval`] keep it current as they supersede, so a
+/// second version in the same batch finds what a read of its row would.
+#[derive(Default)]
+struct Stored {
+    /// Versions and hole of each stored record, by key.
+    records: BTreeMap<String, (i64, Option<String>)>,
+    /// Each stored interval, by interval id.
+    intervals: BTreeMap<String, StoredInterval>,
+}
+
+/// `?first, ?first+1, …`, `n` placeholders.
+fn placeholders(first: usize, n: usize) -> String {
+    let mut text = String::with_capacity(n * 6);
+    for k in 0..n {
+        let sep = if k == 0 { "" } else { ", " };
+        let _ = write!(text, "{sep}?{}", first + k);
+    }
+    text
 }
 
 /// An interval whose box must be (re)computed in this batch.
@@ -1085,9 +1116,81 @@ impl DrillStore {
         payload.map(|p| decode(key, &p)).transpose()
     }
 
-    /// Write `key`'s new current version: supersede it in place if the store holds it, change it in `fresh` if this
-    /// batch added it, and otherwise add it to `fresh`, whose rows [`DrillStore::write_new_records`] inserts. Returns
-    /// the hole its previous version was on, if it had one.
+    /// Read what the store holds of the records and intervals `batch` writes.
+    fn read_stored(&self, batch: &DeltaBatch) -> Result<Stored, DrillStoreError> {
+        let cell = batch.cell_id.as_str();
+        let mut keys = Vec::new();
+        let mut interval_ids = Vec::new();
+        for op in &batch.deltas {
+            if let Some((kind, id)) = parse_key(&op.key) {
+                keys.push(op.key.as_str());
+                if kind == RecordKind::Interval {
+                    interval_ids.push(id);
+                }
+            }
+        }
+        let mut stored = Stored::default();
+        for chunk in keys.chunks(KEYS_PER_LOOKUP) {
+            let text = format!(
+                "SELECT key, versions, hole_id FROM drill_record WHERE cell_id = ?1 AND key IN ({})",
+                placeholders(2, chunk.len())
+            );
+            let mut args: Vec<&dyn ToSql> = Vec::with_capacity(chunk.len() + 1);
+            args.push(&cell);
+            args.extend(chunk.iter().map(|k| k as &dyn ToSql));
+            let rows = self
+                .conn
+                .prepare_cached(&text)
+                .and_then(|mut st| {
+                    st.query_map(args.as_slice(), |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, i64>(1)?,
+                            r.get::<_, Option<String>>(2)?,
+                        ))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()
+                })
+                .map_err(sql("read a batch's stored records"))?;
+            for (key, versions, hole) in rows {
+                stored.records.insert(key, (versions, hole));
+            }
+        }
+        for chunk in interval_ids.chunks(KEYS_PER_LOOKUP) {
+            let text = format!(
+                "SELECT interval_id, rid, tid, body, {PRIOR_COLUMNS} FROM drill_interval \
+                 WHERE cell_id = ?1 AND interval_id IN ({})",
+                placeholders(2, chunk.len())
+            );
+            let mut args: Vec<&dyn ToSql> = Vec::with_capacity(chunk.len() + 1);
+            args.push(&cell);
+            args.extend(chunk.iter().map(|k| k as &dyn ToSql));
+            let rows = self
+                .conn
+                .prepare_cached(&text)
+                .and_then(|mut st| {
+                    st.query_map(args.as_slice(), |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            StoredInterval {
+                                rid: r.get(1)?,
+                                tid: r.get(2)?,
+                                body: r.get(3)?,
+                                prior: read_prior(r, 4)?,
+                            },
+                        ))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()
+                })
+                .map_err(sql("read a batch's stored intervals"))?;
+            stored.intervals.extend(rows);
+        }
+        Ok(stored)
+    }
+
+    /// Write `key`'s new current version: supersede it in place if the store holds it (`stored` says), change it in
+    /// `fresh` if this batch added it, and otherwise add it to `fresh`, whose rows [`DrillStore::write_new_records`]
+    /// inserts. Returns the hole its previous version was on, if it had one.
     #[allow(clippy::too_many_arguments)]
     fn upsert_record<'a>(
         &self,
@@ -1098,6 +1201,7 @@ impl DrillStore {
         hole: Option<&str>,
         seq: i64,
         payload: &'a [u8],
+        stored: &mut Stored,
         fresh: &mut BTreeMap<&'a str, NewRecord<'a>>,
     ) -> Result<Option<String>, DrillStoreError> {
         if let Some(new) = fresh.get_mut(key) {
@@ -1106,39 +1210,29 @@ impl DrillStore {
             (new.seq, new.payload) = (seq, payload);
             return Ok(prior_hole);
         }
-        let prior = optional(
-            self.conn
-                .prepare_cached(
-                    "SELECT versions, hole_id FROM drill_record WHERE cell_id = ?1 AND key = ?2",
-                )
-                .and_then(|mut st| {
-                    st.query_row(params![cell, key], |r| {
-                        Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?))
-                    })
-                }),
-        )
-        .map_err(sql("read a record's versions"))?;
-        let Some((versions, prior_hole)) = prior else {
-            fresh.insert(
-                key,
-                NewRecord {
-                    kind: kind.code(),
-                    record_id: id,
-                    hole_id: hole.map(str::to_string),
-                    versions: 1,
-                    seq,
-                    payload,
-                },
-            );
-            return Ok(None);
-        };
-        self.exec_cached(
-            "supersede a record",
-            "UPDATE drill_record SET hole_id = ?1, versions = ?2, seq = ?3, payload = ?4 \
-             WHERE cell_id = ?5 AND key = ?6",
-            params![hole, versions + 1, seq, payload, cell, key],
-        )?;
-        Ok(prior_hole)
+        if let Some((versions, held_hole)) = stored.records.get_mut(key) {
+            *versions += 1;
+            let prior_hole = std::mem::replace(held_hole, hole.map(str::to_string));
+            self.exec_cached(
+                "supersede a record",
+                "UPDATE drill_record SET hole_id = ?1, versions = ?2, seq = ?3, payload = ?4 \
+                 WHERE cell_id = ?5 AND key = ?6",
+                params![hole, *versions, seq, payload, cell, key],
+            )?;
+            return Ok(prior_hole);
+        }
+        fresh.insert(
+            key,
+            NewRecord {
+                kind: kind.code(),
+                record_id: id,
+                hole_id: hole.map(str::to_string),
+                versions: 1,
+                seq,
+                payload,
+            },
+        );
+        Ok(None)
     }
 
     /// Insert the records new in this batch, a few statements at a time.
@@ -1177,13 +1271,12 @@ impl DrillStore {
         Ok(())
     }
 
-    /// Write `iv`'s row (not its box).
-    /// Write `iv`'s row: supersede it in place if the store holds it, change it in `fresh` if this batch added it,
-    /// and otherwise add it to `fresh`, whose rows [`DrillStore::locate`] writes with their boxes.
+    /// Write `iv`'s row: supersede it in place if the store holds it (`stored` says), change it in `fresh` if this
+    /// batch added it, and otherwise add it to `fresh`, whose rows [`DrillStore::locate`] writes with their boxes.
     fn upsert_interval(
         &mut self,
-        cell: &str,
         iv: &Interval,
+        stored: &mut Stored,
         fresh: &mut BTreeMap<String, NewInterval>,
     ) -> Result<Upserted, DrillStoreError> {
         let (from, to, text) = (
@@ -1212,42 +1305,25 @@ impl DrillStore {
                 text: new_text,
             });
         }
-        let prior = optional(
-            self.conn
-                .prepare_cached(&format!(
-                    "SELECT rid, tid, body, {PRIOR_COLUMNS} FROM drill_interval \
-                     WHERE cell_id = ?1 AND interval_id = ?2"
-                ))
-                .and_then(|mut st| {
-                    st.query_row(params![cell, iv.interval_id], |r| {
-                        Ok((
-                            r.get::<_, i64>(0)?,
-                            r.get::<_, i64>(1)?,
-                            r.get::<_, String>(2)?,
-                            read_prior(r, 3)?,
-                        ))
-                    })
-                }),
-        )
-        .map_err(sql("read an interval's row"))?;
-        if let Some((rid, tid, old_text, prior)) = prior {
-            let (tid, new_text) = if old_text == text {
-                (tid, None)
+        if let Some(held) = stored.intervals.get_mut(&iv.interval_id) {
+            let new_text = if held.body == text {
+                None
             } else {
-                let tid = self.counters.next_tid;
+                held.tid = self.counters.next_tid;
                 self.counters.next_tid += 1;
                 self.counters.stale_texts += 1;
-                (tid, Some((tid, text.clone())))
+                Some((held.tid, text.clone()))
             };
             self.exec_cached(
                 "supersede an interval",
                 "UPDATE drill_interval SET hole_id = ?1, from_mm = ?2, to_mm = ?3, body = ?4, tid = ?5 \
                  WHERE rid = ?6",
-                params![iv.hole_id, from, to, text, tid, rid],
+                params![iv.hole_id, from, to, text, held.tid, held.rid],
             )?;
+            held.body = text;
             return Ok(Upserted {
-                rid,
-                prior: Some(prior),
+                rid: held.rid,
+                prior: Some(held.prior.clone()),
                 text: new_text,
             });
         }
@@ -1324,6 +1400,7 @@ impl DrillStore {
         let mut spans: BTreeMap<i64, Span> = BTreeMap::new();
         let mut fresh: BTreeMap<String, NewInterval> = BTreeMap::new();
         let mut fresh_records: BTreeMap<&str, NewRecord<'_>> = BTreeMap::new();
+        let mut stored = self.read_stored(batch)?;
         let mut texts: Vec<(i64, String)> = Vec::new();
         for op in &batch.deltas {
             if !op.key.starts_with(KEY_PREFIX) {
@@ -1360,6 +1437,7 @@ impl DrillStore {
                 hole_of(record),
                 seq,
                 &op.payload,
+                &mut stored,
                 &mut fresh_records,
             )?;
             match record {
@@ -1383,7 +1461,7 @@ impl DrillStore {
                 }
                 DrillRecord::Interval(iv) => {
                     let Upserted { rid, prior, text } =
-                        self.upsert_interval(cell, iv, &mut fresh)?;
+                        self.upsert_interval(iv, &mut stored, &mut fresh)?;
                     spans.insert(
                         rid,
                         Span {

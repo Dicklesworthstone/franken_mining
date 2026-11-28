@@ -1341,9 +1341,9 @@ fn test_a_text_index_past_its_limit_is_withheld_and_the_rest_goes_on() {
 }
 
 /// Two versions of a record in one batch, which a ledger committed without `drill_law` can hold: the store applies
-/// them in order. An interval is added on one hole and relogged onto another with new text; it ends with the second
-/// version's row, box and text, two versions, and (indexes kept current) the first text as garbage. A survey is
-/// added on hole 0 and moved to hole 1, so both holes' traces change.
+/// them in order. Batch 1 adds an interval on one hole and relogs it onto another with new text, and adds a survey on
+/// hole 0 and moves it to hole 1; batch 2 supersedes both, now stored, twice more. After each batch the store holds
+/// the last versions with their version counts, boxes and texts, and (indexes kept current) the exact garbage.
 #[test]
 fn test_two_versions_of_a_record_in_one_batch_apply_in_order() {
     let mut rng = Rng(9);
@@ -1400,8 +1400,11 @@ fn test_two_versions_of_a_record_in_one_batch_apply_in_order() {
         ..survey(1, STATIONS, &mut rng)
     };
     let pairs = [
-        (DrillRecord::Interval(v1), DrillRecord::Interval(v2)),
-        (DrillRecord::Survey(station), DrillRecord::Survey(moved)),
+        (DrillRecord::Interval(v1), DrillRecord::Interval(v2.clone())),
+        (
+            DrillRecord::Survey(station),
+            DrillRecord::Survey(moved.clone()),
+        ),
     ];
     let mut ops = Vec::new();
     for (first, second) in &pairs {
@@ -1440,33 +1443,126 @@ fn test_two_versions_of_a_record_in_one_batch_apply_in_order() {
             },
         );
     }
-    let want = expected(&held);
-    assert_eq!(want.intervals.len(), 1);
-    assert!(want.intervals[0].located.is_some(), "hole 1 has a trace");
+    assert!(
+        expected(&held).intervals[0].located.is_some(),
+        "hole 1 has a trace"
+    );
+    check(
+        &ledger,
+        &held,
+        &["firstpass"],
+        "secondpass",
+        IndexGarbage {
+            stale_boxes: 0,
+            stale_texts: 1,
+        },
+        &mut rng,
+    );
 
-    let batches = ledger.batches(CELL).unwrap();
-    for defer in [false, true] {
-        let context = format!("indexes deferred: {defer}");
-        let mut store = DrillStore::open_in_memory().unwrap();
-        store.defer_indexes(defer);
-        let mut projection = Projection::open(store).unwrap();
-        projection.catch_up(batches).unwrap();
-        let mut store = projection.into_projector();
-        if defer {
-            store.rebuild_indexes().unwrap();
+    let relogs = [
+        DrillRecord::Interval(Interval {
+            mineralization: "thirdpass".to_string(),
+            from_mm: v2.from_mm + 2_000,
+            to_mm: v2.to_mm + 2_000,
+            ..v2.clone()
+        }),
+        DrillRecord::Interval(Interval {
+            mineralization: "fourthpass".to_string(),
+            hole_id: hole_id(0),
+            ..v2
+        }),
+        DrillRecord::Survey(Survey {
+            hole_id: hole_id(0),
+            ..moved.clone()
+        }),
+        DrillRecord::Survey(Survey {
+            survey_id: moved.survey_id.clone(),
+            depth_mm: moved.depth_mm,
+            ..survey(1, STATIONS, &mut rng)
+        }),
+    ];
+    let ops = relogs
+        .iter()
+        .enumerate()
+        .map(|(i, record)| {
+            let why = format!("relogged twice in batch 2, take {i}");
+            DeltaOp::new(
+                record_key(record.kind(), record.id()),
+                DeltaKind::Supersede,
+                fmine_drill::records::encode_version(record, Some(&why)).unwrap(),
+            )
+        })
+        .collect();
+    let batch = fmine_drill::store::batch_for(&ledger, CELL, lease.epoch, ops).unwrap();
+    // The batch's order, not the order above, decides which version of each key is last.
+    let mut last_word = "";
+    for op in &batch.deltas {
+        let version = fmine_drill::records::decode_version(&op.payload).unwrap();
+        if let DrillRecord::Interval(iv) = &version.record {
+            last_word = if iv.mineralization == "thirdpass" {
+                "thirdpass"
+            } else {
+                "fourthpass"
+            };
         }
-        assert_holds(&store, &want, &context);
-        assert_bbox_answers(&store, &want, &queries(&want, &mut rng), &context);
-        assert_text_answers(&store, &want, &context);
-        assert!(store.text("firstpass").unwrap().is_empty(), "{context}");
-        assert_eq!(store.text("secondpass").unwrap().len(), 1, "{context}");
-        assert_eq!(
-            store.index_garbage(),
-            IndexGarbage {
-                stale_boxes: 0,
-                stale_texts: u64::from(!defer)
-            },
-            "{context}"
-        );
+        let h = held.get_mut(&op.key).unwrap();
+        (h.version, h.versions, h.seq) = (version, h.versions + 1, 2);
+    }
+    ledger.commit(&lease, batch).unwrap();
+    let other_word = if last_word == "thirdpass" {
+        "fourthpass"
+    } else {
+        "thirdpass"
+    };
+    // Both relogs move the interval's box, and each supersedes a text.
+    check(
+        &ledger,
+        &held,
+        &["firstpass", "secondpass", other_word],
+        last_word,
+        IndexGarbage {
+            stale_boxes: 1,
+            stale_texts: 3,
+        },
+        &mut rng,
+    );
+
+    /// Feed `ledger`'s batches to new stores, indexes kept current and deferred, and check each holds `held`, finds
+    /// `present` by text and none of `absent`, and carries `garbage` (none once a rebuild has run).
+    fn check(
+        ledger: &L0Ledger,
+        held: &BTreeMap<String, Held>,
+        absent: &[&str],
+        present: &str,
+        garbage: IndexGarbage,
+        rng: &mut Rng,
+    ) {
+        let want = expected(held);
+        assert_eq!(want.intervals.len(), 1);
+        let batches = ledger.batches(CELL).unwrap();
+        for defer in [false, true] {
+            let context = format!("{} batches, indexes deferred: {defer}", batches.len());
+            let mut store = DrillStore::open_in_memory().unwrap();
+            store.defer_indexes(defer);
+            let mut projection = Projection::open(store).unwrap();
+            projection.catch_up(batches).unwrap();
+            let mut store = projection.into_projector();
+            if defer {
+                store.rebuild_indexes().unwrap();
+            }
+            assert_holds(&store, &want, &context);
+            assert_bbox_answers(&store, &want, &queries(&want, rng), &context);
+            assert_text_answers(&store, &want, &context);
+            for word in absent {
+                assert!(store.text(word).unwrap().is_empty(), "{context}: {word}");
+            }
+            assert_eq!(store.text(present).unwrap().len(), 1, "{context}");
+            let want_garbage = if defer {
+                IndexGarbage::default()
+            } else {
+                garbage
+            };
+            assert_eq!(store.index_garbage(), want_garbage, "{context}");
+        }
     }
 }
