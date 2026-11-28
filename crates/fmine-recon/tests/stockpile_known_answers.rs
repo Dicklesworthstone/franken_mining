@@ -453,3 +453,99 @@ fn test_bd154_pueblo_viejo_2025_additions_and_cone_inference() {
     // Cone swing: 352.1 - 281.7 = +70.4 kt (E666).
     assert!((inf.cone_delta_tonnes - 70.4).abs() < 1.0e-6);
 }
+
+#[test]
+fn test_bd154_stockpile_edge_cases_refuse_without_nan_or_inf() {
+    let base_step = StockpileFlowStep {
+        period_label: "M1".to_string(),
+        inflow_tonnes: 100.0,
+        inflow_tonnes_sd: 5.0,
+        inflow_grade: 2.0,
+        inflow_grade_sd: 0.1,
+        reclaim_tonnes: 80.0,
+        reclaim_tonnes_sd: 4.0,
+        reclaim_grade: 2.0,
+        reclaim_grade_sd: 0.1,
+        process_tonnes_sd: 1.0,
+        process_metal_sd: 0.05,
+    };
+    // 1. Subnormal survey_sd = 1e-160 (var = 1e-320 > 0, 1/var = +inf) must be refused cleanly.
+    let subnormal_survey = StockpileStateSpaceRequest {
+        stockpile_id: "sp_subnormal".to_string(),
+        grade_to_metal_divisor: GRAMS_PER_TROY_OZ,
+        prior: StockpileStatePrior {
+            opening_tonnes: 500.0,
+            opening_metal: 32.0,
+            tonnes_sd: 25.0,
+            metal_sd: 2.0,
+            tonnes_metal_corr: 0.5,
+        },
+        steps: vec![base_step.clone()],
+        observations_by_time: vec![
+            vec![StockpileObservation::VolumetricSurvey {
+                observed_tonnes: 500.0,
+                survey_sd: 1.0e-160,
+            }],
+            vec![],
+        ],
+        confidence_level: 0.90,
+    };
+    assert!(run_stockpile_kalman_smoother(&subnormal_survey).is_err());
+    assert!(solve_batch_gaussian_stockpile(&subnormal_survey).is_err());
+
+    // 2. Extreme grade_to_metal_divisor underflowing/overflowing 1/divisor^2 must be refused cleanly.
+    let extreme_div = StockpileStateSpaceRequest {
+        stockpile_id: "sp_extreme_div".to_string(),
+        grade_to_metal_divisor: 1.0e-200,
+        prior: StockpileStatePrior {
+            opening_tonnes: 500.0,
+            opening_metal: 32.0,
+            tonnes_sd: 25.0,
+            metal_sd: 2.0,
+            tonnes_metal_corr: 0.5,
+        },
+        steps: vec![base_step],
+        observations_by_time: vec![vec![], vec![]],
+        confidence_level: 0.90,
+    };
+    assert!(run_stockpile_kalman_smoother(&extreme_div).is_err());
+
+    // 3. Reclaiming tiny 1e-10 t from an empty stockpile must refuse (never produce 0.0/0.0 = NaN).
+    let empty_reclaim = compare_mixing_models(&MixingComparisonRequest {
+        opening_parcels: vec![],
+        dumped_parcels: vec![],
+        reclaims: vec![ReclaimObservation {
+            period: 1,
+            reclaim_tonnes: 1.0e-10,
+            observed_grade: 2.0,
+            obs_grade_sd: 0.1,
+        }],
+    });
+    assert!(empty_reclaim.is_err());
+
+    // 4. Non-physical negative implied stockpile addition must refuse cleanly.
+    let neg_add = infer_stockpile_additions_and_cone(&StockpileAdditionInferenceRequest {
+        site_id: "bad_site".to_string(),
+        period_id: "2026".to_string(),
+        grade_to_metal_divisor: GRAMS_PER_TROY_OZ,
+        opening_tonnes: 1000.0,
+        opening_tonnes_sd: 10.0,
+        opening_metal: 50.0,
+        opening_metal_sd: 1.0,
+        closing_tonnes: 500.0,
+        closing_tonnes_sd: 10.0,
+        closing_metal: 25.0,
+        closing_metal_sd: 1.0,
+        reclaim_to_crusher_tonnes: 100.0, // closing - opening + reclaim = -400 < 0!
+        reclaim_to_crusher_tonnes_sd: 5.0,
+        reclaim_to_crusher_metal: 5.0,
+        reclaim_to_crusher_metal_sd: 0.5,
+        pit_to_crusher_tonnes: 200.0,
+        cone_opening_tonnes: 50.0,
+        cone_opening_grade: 2.0,
+        cone_closing_tonnes: 55.0,
+        cone_closing_grade: 2.0,
+        confidence_level: 0.90,
+    });
+    assert!(neg_add.is_err());
+}

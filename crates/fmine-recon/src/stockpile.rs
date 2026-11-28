@@ -234,12 +234,21 @@ fn build_cov_2x2(sd0: f64, sd1: f64, corr: f64, context: &str) -> Result<[f64; 4
     let v0 = sd0 * sd0;
     let v1 = sd1 * sd1;
     let cov = corr * sd0 * sd1;
-    if !(v0.is_finite() && v0 > 0.0 && v1.is_finite() && v1 > 0.0 && cov.is_finite()) {
+    if !(v0.is_finite()
+        && v0 > 0.0
+        && (1.0 / v0).is_finite()
+        && v1.is_finite()
+        && v1 > 0.0
+        && (1.0 / v1).is_finite()
+        && cov.is_finite())
+    {
         return Err(ReconError::NumericalFailure {
             detail: format!("{context}: variance overflow/underflow"),
         });
     }
-    Ok([v0, cov, cov, v1])
+    let mat = [v0, cov, cov, v1];
+    let _ = inv_2x2(mat, context)?;
+    Ok(mat)
 }
 
 /// Computes exact flow control vector `u_t` and 2×2 SPD transition noise `Q_t` for one flow step.
@@ -287,6 +296,14 @@ fn step_control_and_cov(
 
     let inv_div = 1.0 / divisor;
     let inv_div2 = inv_div * inv_div;
+    if !(inv_div.is_finite() && inv_div2.is_finite() && u_t.is_finite() && u_m.is_finite()) {
+        return Err(ReconError::NumericalFailure {
+            detail: format!(
+                "step '{}' divisor/control overflowed binary64 range",
+                step.period_label
+            ),
+        });
+    }
     let q00 = v_in_t + v_rec_t + step.process_tonnes_sd * step.process_tonnes_sd;
     let q11 = (step.inflow_grade * step.inflow_grade * v_in_t
         + step.inflow_tonnes * step.inflow_tonnes * v_in_g
@@ -297,6 +314,11 @@ fn step_control_and_cov(
     let q01 = (step.inflow_grade * v_in_t + step.reclaim_grade * v_rec_t) * inv_div;
 
     let q = [q00, q01, q01, q11];
+    if !q.iter().all(|v| v.is_finite()) {
+        return Err(ReconError::NumericalFailure {
+            detail: format!("step '{}' transition Q_t is non-finite", step.period_label),
+        });
+    }
     let _ = inv_2x2(q, &format!("step '{}' transition Q_t", step.period_label))?;
     Ok(([u_t, u_m], q))
 }
@@ -362,12 +384,14 @@ fn validate_request(req: &StockpileStateSpaceRequest) -> Result<[f64; 4], ReconE
                     observed_tonnes,
                     survey_sd,
                 } => {
+                    let var = survey_sd * survey_sd;
                     if !(observed_tonnes.is_finite()
                         && observed_tonnes >= 0.0
                         && survey_sd.is_finite()
                         && survey_sd > 0.0
-                        && (survey_sd * survey_sd).is_finite()
-                        && (survey_sd * survey_sd) > 0.0)
+                        && var.is_finite()
+                        && var > 0.0
+                        && (1.0 / var).is_finite())
                     {
                         return Err(ReconError::invalid(
                             "stockpile.observations",
@@ -379,12 +403,14 @@ fn validate_request(req: &StockpileStateSpaceRequest) -> Result<[f64; 4], ReconE
                     observed_metal,
                     metal_sd,
                 } => {
+                    let var = metal_sd * metal_sd;
                     if !(observed_metal.is_finite()
                         && observed_metal >= 0.0
                         && metal_sd.is_finite()
                         && metal_sd > 0.0
-                        && (metal_sd * metal_sd).is_finite()
-                        && (metal_sd * metal_sd) > 0.0)
+                        && var.is_finite()
+                        && var > 0.0
+                        && (1.0 / var).is_finite())
                     {
                         return Err(ReconError::invalid(
                             "stockpile.observations",
@@ -452,6 +478,14 @@ fn kalman_update_scalar(
     ];
     let p_new = sym_2x2(add_2x2(term1, term2));
     let ll = -0.5 * (det::ln(2.0 * std::f64::consts::PI * s_inn) + (innov * innov) / s_inn);
+    if !(mu_new.iter().all(|v| v.is_finite())
+        && p_new.iter().all(|v| v.is_finite())
+        && ll.is_finite())
+    {
+        return Err(ReconError::NumericalFailure {
+            detail: "scalar Kalman update produced non-finite state or likelihood".to_string(),
+        });
+    }
     Ok((mu_new, p_new, ll))
 }
 
@@ -476,6 +510,14 @@ fn kalman_update_joint(
     let sinv_inn = mv_2x2(s_inv, innov);
     let quad = innov[0] * sinv_inn[0] + innov[1] * sinv_inn[1];
     let ll = -0.5 * (2.0 * det::ln(2.0 * std::f64::consts::PI) + det::ln(det_s) + quad);
+    if !(mu_new.iter().all(|v| v.is_finite())
+        && p_new.iter().all(|v| v.is_finite())
+        && ll.is_finite())
+    {
+        return Err(ReconError::NumericalFailure {
+            detail: "joint Kalman update produced non-finite state or likelihood".to_string(),
+        });
+    }
     Ok((mu_new, p_new, ll))
 }
 
@@ -575,9 +617,17 @@ pub fn run_stockpile_kalman_smoother(
     for t in 0..n_times {
         let m_t = smooth_mu[t][0];
         let metal_t = smooth_mu[t][1];
-        if !(m_t.is_finite() && m_t > 0.0) {
+        if !(m_t.is_finite()
+            && m_t > 0.0
+            && (m_t * m_t) > 0.0
+            && metal_t.is_finite()
+            && smooth_p[t].iter().all(|v| v.is_finite())
+            && filt_p[t].iter().all(|v| v.is_finite()))
+        {
             return Err(ReconError::NumericalFailure {
-                detail: format!("smoothed tonnage at t={t} became non-positive ({m_t})"),
+                detail: format!(
+                    "smoothed stockpile state at t={t} became non-positive or non-finite ({m_t}, {metal_t})"
+                ),
             });
         }
         let sd_t = det::sqrt(smooth_p[t][0].max(0.0));
@@ -593,6 +643,17 @@ pub fn run_stockpile_kalman_smoother(
             + dg_dmetal * dg_dmetal * smooth_p[t][3])
             .max(0.0);
         let sd_g = det::sqrt(var_g);
+        if !(grade.is_finite()
+            && dg_dm.is_finite()
+            && dg_dmetal.is_finite()
+            && sd_g.is_finite()
+            && sd_t.is_finite()
+            && sd_m.is_finite())
+        {
+            return Err(ReconError::NumericalFailure {
+                detail: format!("derived grade or SD overflowed at t={t}"),
+            });
+        }
 
         periods.push(StockpilePeriodEstimate {
             time_index: t,
@@ -620,12 +681,22 @@ pub fn run_stockpile_kalman_smoother(
             add_2x2(smooth_p[t + 1], smooth_p[t]),
             add_2x2(cov_next_curr, trans_2x2(cov_next_curr)),
         ));
+        if !cov_delta.iter().all(|v| v.is_finite()) {
+            return Err(ReconError::NumericalFailure {
+                detail: format!("non-finite lag-1 delta covariance at step t={t}"),
+            });
+        }
         deltas.push(StockpilePeriodDelta {
             period_label: req.steps[t].period_label.clone(),
             delta_tonnes_mean: smooth_mu[t + 1][0] - smooth_mu[t][0],
             delta_tonnes_sd: det::sqrt(cov_delta[0].max(0.0)),
             delta_metal_mean: smooth_mu[t + 1][1] - smooth_mu[t][1],
             delta_metal_sd: det::sqrt(cov_delta[3].max(0.0)),
+        });
+    }
+    if !log_likelihood.is_finite() {
+        return Err(ReconError::NumericalFailure {
+            detail: "stockpile smoother total log_likelihood is non-finite".to_string(),
         });
     }
 
@@ -902,11 +973,14 @@ pub fn compare_mixing_models(
                 dump_idx += 1;
             }
             let total_t: f64 = queue.iter().map(|(t, _)| *t).sum();
-            if total_t + 1.0e-9 < rec.reclaim_tonnes {
+            if !(total_t.is_finite()
+                && total_t > 0.0
+                && total_t + 1.0e-9 * rec.reclaim_tonnes >= rec.reclaim_tonnes)
+            {
                 return Err(ReconError::invalid(
                     "stockpile.mixing.reclaims",
                     format!(
-                        "reclaim {:.2} t at period {} exceeds available stockpile {:.2} t",
+                        "reclaim {:.6} t at period {} exceeds available stockpile {:.6} t",
                         rec.reclaim_tonnes, rec.period, total_t
                     ),
                 ));
@@ -925,36 +999,40 @@ pub fn compare_mixing_models(
                 StockpileMixingModel::Fifo => {
                     let mut need = rec.reclaim_tonnes;
                     let mut taken_metal = 0.0_f64;
-                    while need > 1.0e-12 {
+                    let mut taken_t = 0.0_f64;
+                    while need > 1.0e-12 * rec.reclaim_tonnes {
                         let Some((mut t_front, g_front)) = queue.pop_front() else {
                             break;
                         };
                         let take = t_front.min(need);
                         taken_metal += take * g_front;
+                        taken_t += take;
                         t_front -= take;
                         need -= take;
-                        if t_front > 1.0e-12 {
+                        if t_front > 1.0e-12 * rec.reclaim_tonnes {
                             queue.push_front((t_front, g_front));
                         }
                     }
-                    taken_metal / rec.reclaim_tonnes
+                    taken_metal / taken_t
                 }
                 StockpileMixingModel::Layered => {
                     let mut need = rec.reclaim_tonnes;
                     let mut taken_metal = 0.0_f64;
-                    while need > 1.0e-12 {
+                    let mut taken_t = 0.0_f64;
+                    while need > 1.0e-12 * rec.reclaim_tonnes {
                         let Some((mut t_top, g_top)) = queue.pop_back() else {
                             break;
                         };
                         let take = t_top.min(need);
                         taken_metal += take * g_top;
+                        taken_t += take;
                         t_top -= take;
                         need -= take;
-                        if t_top > 1.0e-12 {
+                        if t_top > 1.0e-12 * rec.reclaim_tonnes {
                             queue.push_back((t_top, g_top));
                         }
                     }
-                    taken_metal / rec.reclaim_tonnes
+                    taken_metal / taken_t
                 }
             };
 
@@ -963,6 +1041,18 @@ pub fn compare_mixing_models(
             ll_sum += -0.5 * (det::ln(2.0 * std::f64::consts::PI * s2) + (err * err) / s2);
             crps_sum += gaussian_crps(rec.observed_grade, pred_grade, rec.obs_grade_sd);
             sq_err_sum += err * err;
+            if !(pred_grade.is_finite()
+                && ll_sum.is_finite()
+                && crps_sum.is_finite()
+                && sq_err_sum.is_finite())
+            {
+                return Err(ReconError::NumericalFailure {
+                    detail: format!(
+                        "mixing model comparison overflowed at period {}",
+                        rec.period
+                    ),
+                });
+            }
             predicted_grades.push(pred_grade);
         }
 
@@ -1122,13 +1212,19 @@ pub fn evaluate_stockpile_metallurgical_state(
     }
     let z1 = (req.card.l1_max_stot_pct - req.stot_pct_mean) / req.stot_pct_sd;
     let z2 = (req.card.l2_max_stot_pct - req.stot_pct_mean) / req.stot_pct_sd;
+    let theta = req.oxidation_rate_per_day * req.exposure_days * (req.sulfide_s_pct_mean / 100.0);
+    let pen = req.card.oxidation_penalty_per_unit * theta;
+    if !(z1.is_finite() && z2.is_finite() && theta.is_finite() && pen.is_finite()) {
+        return Err(ReconError::NumericalFailure {
+            detail: "metallurgical sulphur-class z-scores or oxidation penalty overflowed"
+                .to_string(),
+        });
+    }
     let p_l1 = det::norm_cdf(z1);
     let p_le_l2 = det::norm_cdf(z2);
     let p_l2 = (p_le_l2 - p_l1).max(0.0);
     let p_l3 = (1.0 - p_le_l2).max(0.0);
 
-    let theta = req.oxidation_rate_per_day * req.exposure_days * (req.sulfide_s_pct_mean / 100.0);
-    let pen = req.card.oxidation_penalty_per_unit * theta;
     let r1 = (req.card.recovery_l1 - pen).clamp(0.0, 1.0);
     let r2 = (req.card.recovery_l2 - pen).clamp(0.0, 1.0);
     let r3 = (req.card.recovery_l3 - pen).clamp(0.0, 1.0);
@@ -1254,7 +1350,7 @@ pub fn infer_stockpile_additions_and_cone(
 
     let add_t = req.closing_tonnes - req.opening_tonnes + req.reclaim_to_crusher_tonnes;
     let add_m = req.closing_metal - req.opening_metal + req.reclaim_to_crusher_metal;
-    if add_t <= 0.0 || add_m < 0.0 {
+    if !(add_t.is_finite() && add_m.is_finite()) || add_t <= 0.0 || add_m < 0.0 {
         return Err(ReconError::invalid(
             "stockpile.addition_inference",
             format!("implied stockpile addition (tonnes={add_t}, metal={add_m}) is non-physical"),
@@ -1279,6 +1375,26 @@ pub fn infer_stockpile_additions_and_cone(
         req.cone_closing_tonnes * req.cone_closing_grade / req.grade_to_metal_divisor;
 
     let z = det::norm_ppf(0.5 + 0.5 * req.confidence_level);
+    let ci_t = (add_t - z * sd_t, add_t + z * sd_t);
+    let ci_m = (add_m - z * sd_m, add_m + z * sd_m);
+    if !((add_t * add_t) > 0.0
+        && var_t.is_finite()
+        && var_m.is_finite()
+        && add_g.is_finite()
+        && dg_dt.is_finite()
+        && dg_dm.is_finite()
+        && sd_g.is_finite()
+        && cone_open_m.is_finite()
+        && cone_close_m.is_finite()
+        && ci_t.0.is_finite()
+        && ci_t.1.is_finite()
+        && ci_m.0.is_finite()
+        && ci_m.1.is_finite())
+    {
+        return Err(ReconError::NumericalFailure {
+            detail: "stockpile addition inference overflowed binary64 range".to_string(),
+        });
+    }
     Ok(StockpileAdditionInference {
         site_id: req.site_id.clone(),
         period_id: req.period_id.clone(),
@@ -1291,7 +1407,7 @@ pub fn infer_stockpile_additions_and_cone(
         reclaim_share_of_crusher_feed_pct: 100.0 * req.reclaim_to_crusher_tonnes / crusher_total,
         cone_delta_tonnes: req.cone_closing_tonnes - req.cone_opening_tonnes,
         cone_delta_metal: cone_close_m - cone_open_m,
-        addition_tonnes_ci: (add_t - z * sd_t, add_t + z * sd_t),
-        addition_metal_ci: (add_m - z * sd_m, add_m + z * sd_m),
+        addition_tonnes_ci: ci_t,
+        addition_metal_ci: ci_m,
     })
 }
