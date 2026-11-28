@@ -56,5 +56,6 @@ pub(super) fn execute(input: &Path, root: &Path) -> Envelope {
     };
     envelope.payload_json = result.to_json().to_owned();
     envelope.no_claim = Some(result.no_claim());
+    envelope.rendered_markdown = result.to_markdown().map(str::to_owned);
     envelope
 }

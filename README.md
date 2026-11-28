@@ -954,6 +954,8 @@ moisture observations. The JSON `dry_mass_bridge` compares dry mass at planning
 moisture, at measured moisture, and at the reference wet weight. The first difference
 quantifies the moisture effect. The second quantifies the wet-weight effect at measured
 moisture. The result depends on the submitted reference and its declared independence.
+Use `plant transfer --input <worksheet.toml> --format markdown` for a table of the exact
+lot and total differences with the worksheet SHA-256 and the declared weight-reference lines.
 
 `plant flowsheet` fits all declared unit balances together, with each internal transfer shared by its two
 endpoints. Its worksheet explicitly supplies the graph, every stream and stocktake coordinate, every covariance

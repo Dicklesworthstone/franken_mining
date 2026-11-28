@@ -72,9 +72,7 @@ fn exact(value: &Json) -> (i128, i128) {
     )
 }
 
-#[test]
-fn test_transfer_separates_moisture_and_same_lot_wet_weight_effects() {
-    let scale = r#"
+const SCALE_REFERENCE: &str = r#"
 [[scale_reference]]
 lot = "lot-2"
 wet_kg = "190.00"
@@ -89,12 +87,15 @@ start_ns = "0"
 end_ns = "10"
 source = "synthetic-check-scale/lot-1"
 "#;
+
+#[test]
+fn test_transfer_separates_moisture_and_same_lot_wet_weight_effects() {
     let declared = RAW.replacen(
         "[[lot]]",
         "planning_moisture = \"0.06\"\nreference_scale_independent = \"true\"\n\n[[lot]]",
         1,
     );
-    let input = format!("{declared}\n{scale}");
+    let input = format!("{declared}\n{SCALE_REFERENCE}");
     let input_path = scratch(&input);
     let (status, output, text) = run(&input_path);
     assert_eq!(status, 0, "{text}");
@@ -157,7 +158,7 @@ source = "synthetic-check-scale/lot-1"
             input.replace("wet_kg = \"190.00\"", "wet_kg = \"0\""),
             "FMINE-REF-109",
         ),
-        (format!("{input}\n{scale}"), "FMINE-REF-506"),
+        (format!("{input}\n{SCALE_REFERENCE}"), "FMINE-REF-506"),
     ] {
         let (status, result, text) = run(&scratch(&invalid));
         assert_ne!(status, 0, "{text}");
@@ -165,6 +166,68 @@ source = "synthetic-check-scale/lot-1"
         assert_eq!(at(&result, &["payload", "result"]), &Json::Null);
         assert!(at(&result, &["payload"]).get("dry_mass_bridge").is_none());
     }
+}
+
+#[test]
+fn test_transfer_markdown_shows_exact_lot_effects_and_reference_provenance() {
+    let declared = RAW.replacen(
+        "[[lot]]",
+        "planning_moisture = \"1/3\"\nreference_scale_independent = \"true\"\n\n[[lot]]",
+        1,
+    );
+    let reference =
+        SCALE_REFERENCE.replace("synthetic-check-scale/lot-2", "synthetic|<scale>&[lot-2]");
+    let input = format!("{declared}\n{reference}");
+    let path = scratch(&input);
+    let markdown = |path: &Path| {
+        let out = Command::new(env!("CARGO_BIN_EXE_fmine"))
+            .args(["plant", "transfer", "--input"])
+            .arg(path)
+            .args(["--format", "markdown"])
+            .output()
+            .expect("run actual binary");
+        assert!(out.stderr.is_empty());
+        (
+            out.status.code().expect("normal exit"),
+            String::from_utf8(out.stdout).unwrap(),
+        )
+    };
+    let (status, report) = markdown(&path);
+    assert_eq!(status, 0, "{report}");
+    assert_eq!(markdown(&path).1, report);
+    let (_, json, _) = run(&path);
+    let hash = at(&json, &["payload", "source", "sha256"])
+        .as_str()
+        .unwrap();
+    assert!(report.starts_with("# Dry-mass bridge\n"));
+    assert!(report.contains(&format!("SHA-256 `{hash}`")));
+    assert!(report.contains("Planning moisture is 1/3 of wet mass"));
+    assert!(report.contains("All dry masses and effects are in kg"));
+    assert!(report.contains("| lot-1 | 200/3 | 90 | 99 | 70/3 | 9 | 97/3 | line "));
+    assert!(report.contains("| lot-2 | 400/3 | 160 | 152 | 80/3 | -8 | 56/3 | line "));
+    assert!(report.contains("| **Total** | 200 | 250 | 251 | 50 | 1 | 51 |"));
+    let lot_rows = at(&json, &["payload", "dry_mass_bridge", "lots"])
+        .as_array()
+        .unwrap();
+    let line = at(&lot_rows[1], &["reference_line"]).i64().unwrap();
+    assert!(report.contains(&format!(
+        "line {line}, synthetic&#124;&#60;scale&#62;&#38;&#91;lot-2&#93;"
+    )));
+    assert!(!report.contains("synthetic|<scale>"));
+    assert!(report.contains("Assumed, Internal and uncalibrated"));
+    assert!(!report.contains("```json"));
+
+    let (legacy_status, legacy) = markdown(&scratch(RAW));
+    assert_eq!(legacy_status, 0);
+    assert!(legacy.contains("```json"));
+    let (refused_status, refused) = markdown(&scratch(&input.replacen(
+        "complete = \"true\"",
+        "complete = \"false\"",
+        1,
+    )));
+    assert_ne!(refused_status, 0);
+    assert!(refused.contains("```json"));
+    assert!(!refused.contains("Dry-mass bridge"));
 }
 
 fn observation<'a>(value: &'a Json, key: &str) -> &'a Json {

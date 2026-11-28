@@ -276,7 +276,35 @@ struct Worksheet {
     first_order: bool,
     raw_start: String,
     raw_end: String,
-    dry_mass_bridge: Option<String>,
+    dry_mass_bridge: Option<DryMassBridge>,
+}
+
+struct DryMassBridge {
+    json: String,
+    markdown: String,
+}
+
+fn markdown_text(value: &str) -> String {
+    let mut out = String::new();
+    for ch in value.chars() {
+        match ch {
+            '&' | '<' | '>' | '|' | '`' | '\\' | '[' | ']' | '*' | '_' | '~' => {
+                out.push_str(&format!("&#{};", u32::from(ch)));
+            }
+            ch if ch.is_control() => out.push('�'),
+            ch => out.push(ch),
+        }
+    }
+    out
+}
+
+fn bridge_markdown_row(values: [ExactQty; 6]) -> String {
+    values
+        .map(|value| match value.den() {
+            1 => value.num().to_string(),
+            den => format!("{}/{den}", value.num()),
+        })
+        .join(" | ")
 }
 
 fn dry_mass_bridge(
@@ -285,7 +313,7 @@ fn dry_mass_bridge(
     lots: &BTreeMap<String, usize>,
     observations: &[Observation],
     positions: &BTreeMap<String, usize>,
-) -> Result<Option<String>, Refusal> {
+) -> Result<Option<DryMassBridge>, Refusal> {
     let references: Vec<_> = rows
         .iter()
         .filter(|row| row.table == "scale_reference")
@@ -338,18 +366,29 @@ fn dry_mass_bridge(
             ));
         }
     }
-    let stages_json = |[planned, measured, reference]: [ExactQty; 3]| -> Result<String, Refusal> {
-        Ok(format!(
+    let with_effects = |[planned, measured, reference]: [ExactQty; 3]| -> Result<_, Refusal> {
+        Ok([
+            planned,
+            measured,
+            reference,
+            measured.checked_sub(planned).map_err(arithmetic)?,
+            reference.checked_sub(measured).map_err(arithmetic)?,
+            reference.checked_sub(planned).map_err(arithmetic)?,
+        ])
+    };
+    let stages_json = |[planned, measured, reference, moisture, weight, net]: [ExactQty; 6]| {
+        format!(
             "\"planning_dry_kg\":{},\"measured_moisture_dry_kg\":{},\"reference_dry_kg\":{},\"moisture_effect_kg\":{},\"wet_weight_effect_kg\":{},\"net_effect_kg\":{}",
             exact(planned),
             exact(measured),
             exact(reference),
-            exact(measured.checked_sub(planned).map_err(arithmetic)?),
-            exact(reference.checked_sub(measured).map_err(arithmetic)?),
-            exact(reference.checked_sub(planned).map_err(arithmetic)?),
-        ))
+            exact(moisture),
+            exact(weight),
+            exact(net),
+        )
     };
     let mut rendered = Vec::with_capacity(lots.len());
+    let mut markdown_rows = String::new();
     let mut total = [zero; 3];
     for lot in lots.keys() {
         let (f, line) = by_lot.get(lot.as_str()).ok_or_else(|| {
@@ -409,21 +448,46 @@ fn dry_mass_bridge(
         for (sum, value) in total.iter_mut().zip(stages) {
             *sum = sum.checked_add(value).map_err(arithmetic)?;
         }
+        let comparison = with_effects(stages)?;
+        let reference_source = get(f, "source")?.0;
+        markdown_rows.push_str(&format!(
+            "| {} | {} | line {line}, {} |\n",
+            markdown_text(lot),
+            bridge_markdown_row(comparison),
+            markdown_text(reference_source),
+        ));
         rendered.push(format!(
             "{{\"lot\":{},\"start_ns\":\"{}\",\"end_ns\":\"{}\",\"reported_wet_kg\":{},\"measured_moisture\":{},\"reference_wet_kg\":{},\"reference_wet_kg_raw\":{},\"reference_source\":{},\"reference_line\":{line},{}}}",
             quoted(lot), interval.start_ns, interval.end_ns, exact(*kg),
             exact(*wet_mass_fraction), exact(reference), quoted(raw_reference.0),
-            quoted(get(f, "source")?.0), stages_json(stages)?,
+            quoted(reference_source), stages_json(comparison),
         ));
     }
-    Ok(Some(format!(
+    let comparison = with_effects(total)?;
+    let json = format!(
         "{{\"planning_moisture\":{},\"planning_moisture_raw\":{},\"lots\":[{}],\"total\":{{{}}},\"scope\":{}}}",
         exact(planning_moisture),
         quoted(planning.0),
         rendered.join(","),
-        stages_json(total)?,
+        stages_json(comparison),
         quoted(BRIDGE_SCOPE),
-    )))
+    );
+    let markdown = format!(
+        concat!(
+            "Planning moisture is {} of wet mass (worksheet line {}). All dry masses and effects are in kg.\n\n",
+            "| Lot | Planned dry | At measured moisture | At reference weight | Moisture effect | Wet-weight effect | Net change | Declared weight reference |\n",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n",
+            "{}",
+            "| **Total** | {} | |\n\n",
+            "The conditional comparison applies measured moisture first and then substitutes the declared independent same-lot reference weights. ",
+            "The evidence is Assumed, Internal and uncalibrated.\n",
+        ),
+        planning.0,
+        planning.1,
+        markdown_rows,
+        bridge_markdown_row(comparison),
+    );
+    Ok(Some(DryMassBridge { json, markdown }))
 }
 
 fn boolean(value: (&str, usize)) -> Result<bool, Refusal> {
@@ -948,6 +1012,7 @@ fn projection_json(value: &TransferProjection) -> String {
 pub struct WorksheetResult {
     json: String,
     refusal: Option<Refusal>,
+    markdown: Option<String>,
 }
 impl WorksheetResult {
     pub fn to_json(&self) -> &str {
@@ -956,6 +1021,10 @@ impl WorksheetResult {
 
     pub fn refusal(&self) -> Option<&Refusal> {
         self.refusal.as_ref()
+    }
+
+    pub fn to_markdown(&self) -> Option<&str> {
+        self.markdown.as_deref()
     }
 
     pub fn no_claim(&self) -> &'static str {
@@ -1034,10 +1103,21 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult, Re
         quoted(MOISTURE_BASIS),
         quoted(ASSAY_BASIS)
     );
-    let bridge = match (&refusal, &worksheet.dry_mass_bridge) {
-        (None, Some(bridge)) => format!(",\"dry_mass_bridge\":{bridge}"),
-        _ => String::new(),
-    };
+    let bridge = worksheet
+        .dry_mass_bridge
+        .as_ref()
+        .filter(|_| refusal.is_none());
+    let bridge_json = bridge.map_or_else(String::new, |bridge| {
+        format!(",\"dry_mass_bridge\":{}", bridge.json)
+    });
+    let markdown = bridge.map(|bridge| {
+        format!(
+            "# Dry-mass bridge\n\nWorksheet {} (SHA-256 `{}`).\n\n{}",
+            markdown_text(&source.artifact_path),
+            Digest32(source.artifact_sha256).to_hex(),
+            bridge.markdown,
+        )
+    });
     let json = format!(
         concat!(
             "{{\"schema\":\"fmine.plant-transfer-result.v1\",\"mode\":\"exact_nominal_and_first_order_covariance\",\"source\":{source_json},\"scope\":{scope},",
@@ -1057,9 +1137,13 @@ pub fn evaluate(text: &str, source: &SourceAnchor) -> Result<WorksheetResult, Re
         transfer = transfer,
         digest = digest,
         result = result,
-        bridge = bridge,
+        bridge = bridge_json,
     );
-    Ok(WorksheetResult { json, refusal })
+    Ok(WorksheetResult {
+        json,
+        refusal,
+        markdown,
+    })
 }
 
 #[cfg(test)]
