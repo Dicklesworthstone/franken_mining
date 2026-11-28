@@ -156,11 +156,29 @@ pub fn reconcile_nonlinear(
                 covariance[i * n + j] = column[i];
             }
         }
+        // A true zero cross-covariance can leave ULP-level cancellation noise
+        // in H^-1[i, j] when coupled Hessian blocks cancel analytically. Judge
+        // symmetry against the marginal scale sqrt(H^-1[i,i] * H^-1[j,j]) (as
+        // `partial.rs` does), not against a roundoff cross-term alone.
         for i in 0..n {
+            let var_i = covariance[i * n + i];
+            if !var_i.is_finite() || var_i <= 0.0 {
+                return Err(refuse(
+                    "inverse measurement information has non-positive variance",
+                ));
+            }
+            let sigma_i = var_i.sqrt();
             for j in i + 1..n {
+                let var_j = covariance[j * n + j];
+                if !var_j.is_finite() || var_j <= 0.0 {
+                    return Err(refuse(
+                        "inverse measurement information has non-positive variance",
+                    ));
+                }
+                let marginal_scale = sigma_i * var_j.sqrt();
                 super::audit(
                     covariance[i * n + j] - covariance[j * n + i],
-                    covariance[i * n + j].abs() + covariance[j * n + i].abs(),
+                    (covariance[i * n + j].abs() + covariance[j * n + i].abs()).max(marginal_scale),
                     "inverse measurement information symmetry",
                 )?;
                 let value = 0.5 * covariance[i * n + j] + 0.5 * covariance[j * n + i];
@@ -477,5 +495,56 @@ mod tests {
             assert!((x / s - 5.0_f64.sqrt()).abs() < 1e-9);
         }
         assert!((r.objective - 32.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn coupled_hessian_with_analytically_zero_cross_covariance_passes_symmetry_audit() {
+        // Two-product concentrator structure with unweighed tails M_T = M_F - M_C:
+        // H = J^T J couples M_C to M_F (via M_T) and M_F to m_F (via g_F = m_F / M_F),
+        // while analytically H^-1[M_C, m_F] = 0. ULP cancellation in LDLT solves must
+        // be audited against sqrt(H^-1[i,i] * H^-1[j,j]), not the ~1e-16 roundoff term.
+        let r = reconcile_nonlinear(
+            NonlinearProblem {
+                initial: &[100_000.0, 3_000.0, 850.0, 765.0, 85.0],
+                correlation: &[
+                    1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+                    0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+                ],
+                observation_count: 5,
+                constraints: &[0.0, 0.0, 1.0, -1.0, -1.0],
+                targets: &[0.0],
+                tolerances: &[1e-10],
+                max_iterations: 64,
+            },
+            |x, r, j| {
+                j.fill(0.0);
+                let (mf, mc, emf, emc, emt) = (x[0], x[1], x[2], x[3], x[4]);
+                let mt = mf - mc;
+                let (smf, smc, sgf, sgc, sgt) = (1500.0, 15.0, 0.00017, 0.0013, 0.00002);
+                r[0] = (mf - 100_000.0) / smf;
+                j[0] = 1.0 / smf;
+                r[1] = (mc - 3_000.0) / smc;
+                j[5 + 1] = 1.0 / smc;
+                r[2] = (emf / mf - 0.0085) / sgf;
+                j[10] = -(emf / (mf * mf)) / sgf;
+                j[10 + 2] = (1.0 / mf) / sgf;
+                r[3] = (emc / mc - 0.255) / sgc;
+                j[15 + 1] = -(emc / (mc * mc)) / sgc;
+                j[15 + 3] = (1.0 / mc) / sgc;
+                r[4] = (emt / mt - (85.0 / 97_000.0)) / sgt;
+                j[20] = -(emt / (mt * mt)) / sgt;
+                j[20 + 1] = (emt / (mt * mt)) / sgt;
+                j[20 + 4] = (1.0 / mt) / sgt;
+                Ok(())
+            },
+            |x| {
+                let mt = x[0] - x[1];
+                x[0] > 0.0 && x[1] > 0.0 && mt > 0.0 && x[2] > 0.0 && x[3] > 0.0 && x[4] > 0.0
+            },
+        )
+        .expect("concentrator nonlinear balance converges");
+        assert!(r.objective < 1e-18);
+        assert!((r.estimates[0] - 100_000.0).abs() < 1e-6);
+        assert!((r.estimates[2] - 850.0).abs() < 1e-9);
     }
 }

@@ -226,32 +226,52 @@ pub fn evaluate(closures: &[(String, String)], manifest: &str, stack_lock: &str)
     }
 }
 
-pub(crate) fn cargo_tree(root: &Path, target: &[&str]) -> Result<String, String> {
+/// The platforms the closures are built for: deny.toml's `[graph] targets`, which cargo-deny checks one by one.
+/// Each gets its own `cargo tree`, because `--target all` unions every platform's edges into one graph and so lists
+/// packages that no build links. asupersync takes `wasm-bindgen-futures` on wasm32 only, and that crate takes
+/// `tokio` only on emscripten under the unstable `wasm_bindgen_unstable_tokio` cfg. No real build pairs those two
+/// edges, but `--target all` does.
+pub const CLOSURE_TARGETS: [&str; 3] = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "wasm32-unknown-unknown",
+];
+
+/// `cargo tree` of `args` on `platform`: a target triple, or `all` for the union of every platform's edges.
+pub(crate) fn cargo_tree(root: &Path, platform: &str, args: &[&str]) -> Result<String, String> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let out = Command::new(cargo)
         .current_dir(root)
-        .args(["tree", "--locked", "-e", "normal,build", "--target", "all"])
+        .args(["tree", "--locked", "-e", "normal,build", "--target", platform])
         .args(["--prefix", "depth", "--format", "{p}"])
-        .args(target)
+        .args(args)
         .output()
         .map_err(|e| format!("cargo tree: {e}"))?;
     if !out.status.success() {
         return Err(format!(
-            "cargo tree {target:?}: {}",
+            "cargo tree --target {platform} {args:?}: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
-    String::from_utf8(out.stdout).map_err(|e| format!("cargo tree {target:?}: {e}"))
+    String::from_utf8(out.stdout)
+        .map_err(|e| format!("cargo tree --target {platform} {args:?}: {e}"))
 }
 
-/// Every production closure: the workspace without `xtask`, then each posture root that exists yet.
+/// Every production closure on each of [`CLOSURE_TARGETS`]: the workspace without `xtask`, then each posture root
+/// that exists yet. A closure is named `<root> (<target>)`.
 fn production_closures(root: &Path) -> Result<Vec<(String, String)>, String> {
     let all = ["--workspace", "--exclude", "xtask"];
-    let mut closures = vec![("workspace".to_string(), cargo_tree(root, &all)?)];
-    for posture in POSTURE_ROOTS {
-        if root.join("crates").join(posture).exists() {
-            let tree = cargo_tree(root, &["-p", posture])?;
-            closures.push((posture.to_string(), tree));
+    let mut closures = Vec::new();
+    for platform in CLOSURE_TARGETS {
+        closures.push((
+            format!("workspace ({platform})"),
+            cargo_tree(root, platform, &all)?,
+        ));
+        for posture in POSTURE_ROOTS {
+            if root.join("crates").join(posture).exists() {
+                let tree = cargo_tree(root, platform, &["-p", posture])?;
+                closures.push((format!("{posture} ({platform})"), tree));
+            }
         }
     }
     Ok(closures)
@@ -446,26 +466,63 @@ mod tests {
         );
     }
 
-    /// The real workspace, through a real `cargo tree`, which is also what catches the listing's format drifting.
+    /// The real workspace, through a real `cargo tree` per target, which is also what catches the listing's format
+    /// drifting. fsqlite brings asupersync into `fmine-projection`'s native closure (`BD-121`), so all three checks
+    /// apply. asupersync is in the native closures, from the pinned rev, and absent on wasm32, which builds no
+    /// fsqlite store.
     #[test]
-    fn test_workspace_is_not_applicable() {
+    fn test_workspace_closures_pass_on_every_target() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let closures = production_closures(&root).expect("cargo tree");
-        let packages: Vec<TreeLine> = closures[0].1.lines().filter_map(parse_tree_line).collect();
-        assert!(
-            packages
+        let pin = pinned_rev(&fs::read_to_string(root.join("franken-stack.lock")).unwrap()).unwrap();
+        for platform in CLOSURE_TARGETS {
+            let name = format!("workspace ({platform})");
+            let (_, tree) = closures.iter().find(|(n, _)| *n == name).expect("workspace closure");
+            let packages: Vec<TreeLine> = tree.lines().filter_map(parse_tree_line).collect();
+            assert!(
+                packages
+                    .iter()
+                    .any(|p| p.depth == 0 && p.name == "fmine-cli")
+            );
+            assert!(
+                packages.iter().all(|p| p.name != "xtask"),
+                "xtask is not production"
+            );
+            let runtimes: BTreeSet<&str> = packages
                 .iter()
-                .any(|p| p.depth == 0 && p.name == "fmine-cli")
-        );
-        assert!(
-            packages.iter().all(|p| p.name != "xtask"),
-            "xtask is not production"
-        );
+                .filter(|p| p.name == RUNTIME)
+                .map(|p| p.source.as_str())
+                .collect();
+            if platform == "wasm32-unknown-unknown" {
+                assert!(runtimes.is_empty(), "{name}: {runtimes:?}");
+            } else {
+                assert_eq!(runtimes.len(), 1, "{name}: {runtimes:?}");
+                assert!(runtimes.iter().all(|s| s.contains(&format!("rev={pin}"))), "{name}: {runtimes:?}");
+            }
+        }
         let (report, lock) = check_int_as_001a(&root).expect("closure checks");
-        assert!(report.status_line(&lock).contains("NOT_APPLICABLE"));
+        assert!(report.present);
+        assert_eq!(report.status_line(&lock), format!("INT-AS-001a: checks PASS at {lock}"));
         assert_eq!(lock.len(), 64);
         for r in &report.rows {
             println!("{}", r.log_line());
         }
+    }
+
+    /// The closures are built for exactly the platforms cargo-deny checks.
+    #[test]
+    fn test_closure_targets_are_deny_toml_graph_targets() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let deny = fs::read_to_string(root.join("deny.toml")).unwrap();
+        let mut in_graph = false;
+        let mut listed = None;
+        for line in deny.lines().map(str::trim) {
+            if line.starts_with('[') {
+                in_graph = line == "[graph]";
+            } else if in_graph && line.split('=').next().map(str::trim) == Some("targets") {
+                listed = Some(line.split('"').skip(1).step_by(2).collect::<Vec<_>>());
+            }
+        }
+        assert_eq!(listed.as_deref(), Some(&CLOSURE_TARGETS[..]));
     }
 }

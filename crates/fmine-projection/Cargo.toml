@@ -5,12 +5,18 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 publish = false
-description = "Projector framework: derived, rebuildable projections of ledger cells, each holding a per-cell high-water mark stored with its state (BD-120, plan §26.1)."
+description = "Projector framework and the fsqlite drillhole projection: derived, rebuildable views of ledger cells, each holding a per-cell high-water mark stored with its state (BD-120, BD-121, plan §26.1)."
 
 [lints]
 workspace = true
 
 [dependencies]
 fmine-core = { path = "../fmine-core" }
+fmine-drill = { path = "../fmine-drill" }
 fmine-evidence = { path = "../fmine-evidence" }
 fmine-ledger = { path = "../fmine-ledger" }
+
+# The fsqlite store (BD-121, FD-FSQL-00). Native only: `fsqlite::blocking` is not built for wasm32, and no wasm
+# build carries a projection store.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+fsqlite = { version = "=0.5.1", default-features = false, features = ["native", "fts5", "rtree"] }

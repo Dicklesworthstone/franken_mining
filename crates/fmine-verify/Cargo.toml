@@ -19,7 +19,9 @@ fmine-object = { path = "../fmine-object" }
 fmine-sync = { path = "../fmine-sync" }
 
 [dev-dependencies]
+fmine-flow = { path = "../fmine-flow" }
 fmine-gen = { path = "../fmine-gen" }
 fmine-lab = { path = "../fmine-lab" }
 fmine-optimize = { path = "../fmine-optimize" }
+fmine-recon = { path = "../fmine-recon" }
 fmine-units = { path = "../fmine-units" }

@@ -8,6 +8,12 @@ targets = ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin", "wasm32-unknown-u
 [advisories]
 version = 2
 yanked = "deny"
+# chrono reaches the graph only through fsqlite-func (the chrono wrapper listed under [bans]), and fmine-time owns
+# civil time. RUSTSEC-2026-0543 is informational (unmaintained, no vulnerability, no patched version); moving off
+# chrono is frankensqlite's change to make.
+ignore = [
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; only via fsqlite-func, never a direct dependency" },
+]
 
 [licenses]
 version = 2
@@ -66,22 +72,152 @@ allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counse
 name = "xtask"
 allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
 
-# The suite crates are not in the graph yet; uncomment when they enter (WP-04), with a [[licenses.clarify]] entry
-# for each LICENSE file.
-# [[licenses.exceptions]]
-# name = "asupersync"
-# allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+# Suite crates in the graph since fsqlite entered fmine-projection (BD-121): asupersync and the three crates of
+# its workspace declare the rider licence, so they are admitted by name.
+[[licenses.exceptions]]
+name = "asupersync"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "franken-decision"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "franken-evidence"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "franken-kernel"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+# fsqlite's 17 crates declare no `license` field. Each ships the same LICENSE, "MIT License (with OpenAI/Anthropic
+# Rider)", so each is clarified to the rider and admitted by name.
+[[licenses.exceptions]]
+name = "fsqlite"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fsqlite-ast"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fsqlite-btree"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fsqlite-core"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fsqlite-error"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fsqlite-ext-fts5"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fsqlite-ext-rtree"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fsqlite-func"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fsqlite-mvcc"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fsqlite-observability"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fsqlite-pager"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fsqlite-parser"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fsqlite-planner"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fsqlite-types"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fsqlite-vdbe"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fsqlite-vfs"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fsqlite-wal"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.clarify]]
+crate = "fsqlite@0.5.1"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+[[licenses.clarify]]
+crate = "fsqlite-ast@0.5.1"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+[[licenses.clarify]]
+crate = "fsqlite-btree@0.5.1"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+[[licenses.clarify]]
+crate = "fsqlite-core@0.5.1"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+[[licenses.clarify]]
+crate = "fsqlite-error@0.5.1"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+[[licenses.clarify]]
+crate = "fsqlite-ext-fts5@0.5.1"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+[[licenses.clarify]]
+crate = "fsqlite-ext-rtree@0.5.1"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+[[licenses.clarify]]
+crate = "fsqlite-func@0.5.1"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+[[licenses.clarify]]
+crate = "fsqlite-mvcc@0.5.1"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+[[licenses.clarify]]
+crate = "fsqlite-observability@0.5.1"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+[[licenses.clarify]]
+crate = "fsqlite-pager@0.5.1"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+[[licenses.clarify]]
+crate = "fsqlite-parser@0.5.1"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+[[licenses.clarify]]
+crate = "fsqlite-planner@0.5.1"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+[[licenses.clarify]]
+crate = "fsqlite-types@0.5.1"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+[[licenses.clarify]]
+crate = "fsqlite-vdbe@0.5.1"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+[[licenses.clarify]]
+crate = "fsqlite-vfs@0.5.1"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+[[licenses.clarify]]
+crate = "fsqlite-wal@0.5.1"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+# Two permissive licences outside `allow`, admitted for one crate each: a build-time archive writer (via
+# stacker -> psm -> cc) and the hash fsqlite uses.
+[[licenses.exceptions]]
+name = "ar_archive_writer"
+allow = ["Apache-2.0 WITH LLVM-exception"]
+[[licenses.exceptions]]
+name = "xxhash-rust"
+allow = ["BSL-1.0"]
+# Not in the graph yet; uncomment when they enter, with a [[licenses.clarify]] entry if the manifest has no licence.
 # [[licenses.exceptions]]
 # name = "asupersync-macros"
-# allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
-# [[licenses.exceptions]]
-# name = "franken-decision"
-# allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
-# [[licenses.exceptions]]
-# name = "franken-evidence"
-# allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
-# [[licenses.exceptions]]
-# name = "franken-kernel"
 # allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
 # [[licenses.exceptions]]
 # name = "ftui"
@@ -92,20 +228,27 @@ multiple-versions = "deny"
 # Path dependencies carry no version; with every workspace crate `publish = false` they are not wildcards.
 wildcards = "deny"
 allow-wildcard-paths = true
-skip = []
-# When asupersync enters (WP-04), it brings nine duplicate pairs (R7-C150; FA's deny.toml at 41363acb skips the
-# same ones). Add each with its reason then:
-# skip = [
-#     { name = "block-buffer" },
-#     { name = "const-oid" },
-#     { name = "cpufeatures" },
-#     { name = "crypto-common" },
-#     { name = "digest" },
-#     { name = "getrandom" },
-#     { name = "rand_core" },
-#     { name = "sha2" },
-#     { name = "syn" },
-# ]
+# fsqlite 0.5.1 and asupersync 0.6.2 entered with fmine-projection (BD-121). Each skip names the older version and
+# what still takes it; the newer one is what the rest of the graph uses. The first nine are the pairs R7-C150
+# expected with asupersync (FA's deny.toml at 41363acb skips the same ones). They come from the NATS key stack
+# (asupersync -> nkeys 0.4 -> ed25519-dalek 2, signatory 0.27) on digest 0.10.
+skip = [
+    { crate = "block-buffer@0.10.4", reason = "digest 0.10 (nkeys -> ed25519-dalek 2 stack)" },
+    { crate = "const-oid@0.9.6", reason = "der 0.7 (signatory -> pkcs8 0.10)" },
+    { crate = "cpufeatures@0.2.17", reason = "curve25519-dalek 4 and sha2 0.10 (ed25519-dalek 2)" },
+    { crate = "crypto-common@0.1.7", reason = "digest 0.10 (nkeys -> ed25519-dalek 2 stack)" },
+    { crate = "digest@0.10.7", reason = "curve25519-dalek 4, sha2 0.10, signature 2 (nkeys -> ed25519-dalek 2)" },
+    { crate = "getrandom@0.2.17", reason = "nkeys 0.4 and rand_core 0.6" },
+    { crate = "rand_core@0.6.4", reason = "rand 0.8, rand_chacha 0.3, signatory 0.27, signature 2 (nkeys)" },
+    { crate = "sha2@0.10.9", reason = "ed25519-dalek 2 (nkeys); asupersync itself takes sha2 0.11" },
+    { crate = "syn@2.0.119", reason = "derive crates not yet on syn 3: prost, tracing, zerocopy, zeroize, windows" },
+    { crate = "rand@0.8.8", reason = "nkeys 0.4; fsqlite takes rand 0.10" },
+    { crate = "hashbrown@0.14.5", reason = "dashmap 6 (fsqlite-pager); everything else takes hashbrown 0.17" },
+    { crate = "lock_api@0.4.14", reason = "dashmap 6 (fsqlite-pager) and parking_lot 0.12 (asupersync)" },
+    { crate = "parking_lot@0.12.5", reason = "asupersync 0.6.2; fsqlite 0.5.1 takes parking_lot 0.13" },
+    { crate = "parking_lot_core@0.9.12", reason = "parking_lot 0.12 (asupersync) and dashmap 6 (fsqlite-pager)" },
+    { crate = "nix@0.31.4", reason = "asupersync 0.6.2; fsqlite 0.5.1 takes nix 0.32" },
+]
 
 # Banned dependencies and public-API exposure (§28.5 L-5):
 # - Foreign async runtimes / HTTP stacks: tokio, async-std, smol, hyper, reqwest, actix, axum, tower, tonic

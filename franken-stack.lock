@@ -3,7 +3,7 @@
 # No executive deliverable may be blocked by an unconverged sibling; each row has an explicit fallback.
 
 schema_version = 1
-updated_at = "2026-10-31"
+updated_at = "2026-11-27"
 
 # Row ids are plan Appendix F.1's `FD-…-00`; F.2 uses `-01`… for upstream asks (R7-C162). `xtask check-stack-lock`
 # keeps the two sets equal.
@@ -12,8 +12,8 @@ updated_at = "2026-10-31"
 id = "FD-AS-00"
 name = "asupersync"
 posture = "consume"
-pin = "=0.5.0"
-git_rev = "78b64636e"
+pin = "=0.6.2"
+git_rev = "a5d23e8dd2c8d776bd02e2da8e38e6296600e84c"
 confined_to = ["fmine-runtime", "fmine-authz", "fmine-ledger", "fmine-object", "fmine-telemetry", "fmine-sync", "fmine-lab", "fmine-decide"]
 admission_gate = "INT-AS-001"
 fallback = "Single-package-id patch in [patch.crates-io]; K/E crates receive Cx<cap::None> only."
@@ -91,7 +91,7 @@ fallback = "Build-time/dev-only oracle; golden formulas checked into fmine-oracl
 id = "FD-FSQL-00"
 name = "frankensqlite"
 posture = "consume"
-pin = "=0.4.12"
+pin = "=0.5.1"
 confined_to = ["fmine-projection", "fmine-telemetry"]
 admission_gate = "INT-FSQL-001"
 fallback = "Projection-only (rebuildable from fmine-ledger); KILL-4 promotes to persistence rung L2."

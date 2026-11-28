@@ -100,7 +100,7 @@ fn production_tree(root: &Path) -> Result<String, Vec<String>> {
         }
     }
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    crate::int_as::cargo_tree(root, &args).map_err(|e| vec![e])
+    crate::int_as::cargo_tree(root, "all", &args).map_err(|e| vec![e])
 }
 
 /// Every file under `dir`, in path order.
