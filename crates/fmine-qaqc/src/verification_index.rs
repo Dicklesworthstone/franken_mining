@@ -631,6 +631,24 @@ fn is_valid_sha256_hex(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
+fn is_clean_text(s: &str) -> bool {
+    !s.is_empty() && s.trim() == s && !s.chars().any(char::is_control)
+}
+
+fn escape_md_cell(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '|' => out.push_str("\\|"),
+            '`' => out.push('\''),
+            '\n' | '\r' => out.push(' '),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn check_refs(
     refs: &[String],
     originals: &BTreeMap<String, CasOriginalRef>,
@@ -652,22 +670,22 @@ fn check_refs(
 pub fn build_data_verification_index(
     req: &DataVerificationIndexRequest,
 ) -> Result<DataVerificationIndex, QaqcError> {
-    if req.property_name.trim().is_empty()
-        || req.effective_date.trim().is_empty()
-        || req.evidence_cut_id.trim().is_empty()
+    if !is_clean_text(&req.property_name)
+        || !is_clean_text(&req.effective_date)
+        || !is_clean_text(&req.evidence_cut_id)
     {
         return Err(QaqcError::invalid(
             "verification_index.metadata",
-            "property_name, effective_date, and evidence_cut_id must be non-empty",
+            "property_name, effective_date, and evidence_cut_id must be non-empty clean text without edge whitespace or control chars",
         ));
     }
 
     let mut originals = BTreeMap::new();
     for orig in &req.signed_originals {
-        if orig.ref_id.trim().is_empty() || orig.locator.trim().is_empty() {
+        if !is_clean_text(&orig.ref_id) || !is_clean_text(&orig.locator) {
             return Err(QaqcError::invalid(
                 "verification_index.signed_originals",
-                "ref_id and locator must be non-empty",
+                "ref_id and locator must be non-empty clean text",
             ));
         }
         if !is_valid_sha256_hex(&orig.sha256_hex) {
@@ -690,20 +708,35 @@ pub fn build_data_verification_index(
         }
     }
 
+    let mut seen_audits = BTreeSet::new();
     for audit in &req.database_audits {
-        if audit.audit_id.trim().is_empty() {
+        if !is_clean_text(&audit.audit_id) || audit.notes.chars().any(char::is_control) {
             return Err(QaqcError::invalid(
                 "verification_index.database_audits",
-                "audit_id must not be empty",
+                "audit_id must be clean non-empty text and notes must not contain control chars",
+            ));
+        }
+        if !seen_audits.insert(audit.audit_id.clone()) {
+            return Err(QaqcError::invalid(
+                "verification_index.database_audits",
+                format!("duplicate database audit_id '{}'", audit.audit_id),
             ));
         }
         check_refs(&audit.original_refs, &originals, "database_audits")?;
     }
+
+    let mut seen_campaigns = BTreeSet::new();
     for camp in &req.qaqc_campaigns {
-        if camp.campaign_id.trim().is_empty() {
+        if !is_clean_text(&camp.campaign_id) {
             return Err(QaqcError::invalid(
                 "verification_index.qaqc_campaigns",
-                "campaign_id must not be empty",
+                "campaign_id must be clean non-empty text",
+            ));
+        }
+        if !seen_campaigns.insert(camp.campaign_id.clone()) {
+            return Err(QaqcError::invalid(
+                "verification_index.qaqc_campaigns",
+                format!("duplicate campaign_id '{}'", camp.campaign_id),
             ));
         }
         if camp.batches_without_signed_certificate > camp.total_batches {
@@ -715,7 +748,116 @@ pub fn build_data_verification_index(
                 ),
             ));
         }
+        for crm in &camp.crm_summaries {
+            if !is_clean_text(&crm.crm_id)
+                || !is_clean_text(&crm.lab)
+                || !is_clean_text(&crm.rule_id)
+                || !is_clean_text(&crm.rule_version)
+                || crm.failure_count > crm.sample_count
+                || crm.warning_count > crm.sample_count
+                || !crm.bias.bias.is_finite()
+                || crm.bias.ci_lower.is_some_and(|v| !v.is_finite())
+                || crm.bias.ci_upper.is_some_and(|v| !v.is_finite())
+                || matches!((crm.bias.ci_lower, crm.bias.ci_upper), (Some(lo), Some(hi)) if lo > hi)
+            {
+                return Err(QaqcError::invalid(
+                    "verification_index.crm_summaries",
+                    format!(
+                        "campaign '{}' contains invalid CRM summary '{}'",
+                        camp.campaign_id, crm.crm_id
+                    ),
+                ));
+            }
+        }
+        for blk in &camp.blank_summaries {
+            let Some(sum_fail_indet) = blk.failure_count.checked_add(blk.indeterminate_count)
+            else {
+                return Err(QaqcError::invalid(
+                    "verification_index.blank_summaries",
+                    "blank summary failure + indeterminate overflow",
+                ));
+            };
+            if !is_clean_text(&blk.rule_id)
+                || !is_clean_text(&blk.rule_version)
+                || sum_fail_indet > blk.total_count
+                || blk
+                    .failure_rate_pct
+                    .is_some_and(|r| !r.is_finite() || !(0.0..=100.0).contains(&r))
+                || blk
+                    .possible_failure_rate_pct
+                    .is_some_and(|r| !r.is_finite() || !(0.0..=100.0).contains(&r))
+            {
+                return Err(QaqcError::invalid(
+                    "verification_index.blank_summaries",
+                    format!(
+                        "campaign '{}' contains invalid blank summary",
+                        camp.campaign_id
+                    ),
+                ));
+            }
+        }
+        for dup in &camp.duplicate_summaries {
+            if !is_clean_text(&dup.stage_label)
+                || !is_clean_text(&dup.grade_band)
+                || !dup.cv_avr_pct.is_finite()
+                || dup.cv_avr_pct < 0.0
+                || !dup.hard_from_cv_pct.is_finite()
+                || dup.hard_from_cv_pct < 0.0
+            {
+                return Err(QaqcError::invalid(
+                    "verification_index.duplicate_summaries",
+                    format!(
+                        "campaign '{}' contains invalid duplicate summary",
+                        camp.campaign_id
+                    ),
+                ));
+            }
+        }
+        let mut seen_monitors = BTreeSet::new();
+        for mon in &camp.monitor_summaries {
+            if !is_clean_text(&mon.crm_id)
+                || !is_clean_text(&mon.lab)
+                || !mon.eproc_max_log_wealth.is_finite()
+                || mon
+                    .disposition_note
+                    .as_deref()
+                    .is_some_and(|n| n.chars().any(char::is_control))
+            {
+                return Err(QaqcError::invalid(
+                    "verification_index.monitor_summaries",
+                    format!(
+                        "campaign '{}' contains invalid sequential monitor summary",
+                        camp.campaign_id
+                    ),
+                ));
+            }
+            if !seen_monitors.insert((mon.crm_id.clone(), mon.lab.clone())) {
+                return Err(QaqcError::invalid(
+                    "verification_index.monitor_summaries",
+                    format!(
+                        "campaign '{}' contains duplicate monitor ({}, {})",
+                        camp.campaign_id, mon.crm_id, mon.lab
+                    ),
+                ));
+            }
+        }
+        let mut seen_labs = BTreeSet::new();
         for lab in &camp.per_lab_failures {
+            if !is_clean_text(&lab.lab) {
+                return Err(QaqcError::invalid(
+                    "verification_index.per_lab_failures",
+                    "lab name must be clean non-empty text",
+                ));
+            }
+            if !seen_labs.insert(lab.lab.clone()) {
+                return Err(QaqcError::invalid(
+                    "verification_index.per_lab_failures",
+                    format!(
+                        "campaign '{}' contains duplicate per_lab_failures lab '{}'",
+                        camp.campaign_id, lab.lab
+                    ),
+                ));
+            }
             if lab.crm_failures > lab.crm_total || lab.blank_failures > lab.blank_total {
                 return Err(QaqcError::invalid(
                     "verification_index.per_lab_failures",
@@ -726,13 +868,45 @@ pub fn build_data_verification_index(
                 ));
             }
         }
+        let mut seen_absent = BTreeSet::new();
+        for cap in &camp.control_absent_periods {
+            if !is_clean_text(&cap.period_label) || !is_clean_text(&cap.control_kind) {
+                return Err(QaqcError::invalid(
+                    "verification_index.control_absent_periods",
+                    "period_label and control_kind must be clean non-empty text",
+                ));
+            }
+            if !seen_absent.insert((cap.period_label.clone(), cap.control_kind.clone())) {
+                return Err(QaqcError::invalid(
+                    "verification_index.control_absent_periods",
+                    format!(
+                        "campaign '{}' contains duplicate control_absent_period ({}, {})",
+                        camp.campaign_id, cap.period_label, cap.control_kind
+                    ),
+                ));
+            }
+        }
         check_refs(&camp.original_refs, &originals, "qaqc_campaigns")?;
     }
+
+    let mut seen_umpires = BTreeSet::new();
     for u in &req.umpire_batches {
-        if u.batch_id.trim().is_empty() || u.pair_count == 0 {
+        if !is_clean_text(&u.batch_id)
+            || !is_clean_text(&u.primary_lab)
+            || !is_clean_text(&u.umpire_lab)
+            || !is_clean_text(&u.analyte)
+            || !is_clean_text(&u.method)
+            || u.pair_count == 0
+        {
             return Err(QaqcError::invalid(
                 "verification_index.umpire_batches",
-                "umpire batch requires non-empty batch_id and pair_count >= 1",
+                "umpire batch requires clean non-empty identifiers/labels and pair_count >= 1",
+            ));
+        }
+        if !seen_umpires.insert(u.batch_id.clone()) {
+            return Err(QaqcError::invalid(
+                "verification_index.umpire_batches",
+                format!("duplicate umpire batch_id '{}'", u.batch_id),
             ));
         }
         if !(u.mean_bias_pct.is_finite()
@@ -753,7 +927,8 @@ pub fn build_data_verification_index(
         check_refs(&u.original_refs, &originals, "umpire_batches")?;
     }
     if let Some(ds) = &req.density_and_survey {
-        if ds.density_lab_checks > ds.density_samples_total
+        if !is_clean_text(&ds.survey_instrument)
+            || ds.density_lab_checks > ds.density_samples_total
             || ds.survey_holes_checked > ds.survey_holes_total
             || !(ds.nominal_density_spacing_m.is_finite()
                 && ds.nominal_density_spacing_m > 0.0
@@ -762,37 +937,54 @@ pub fn build_data_verification_index(
         {
             return Err(QaqcError::invalid(
                 "verification_index.density_and_survey",
-                "density/survey counts exceed totals or spacings are non-positive/non-finite",
+                "density/survey counts exceed totals, instrument is invalid, or spacings are non-positive/non-finite",
             ));
         }
         check_refs(&ds.original_refs, &originals, "density_and_survey")?;
     }
     for sv in &req.site_visits {
-        if sv.visit_date.trim().is_empty() || sv.qp_role.trim().is_empty() {
+        if !is_clean_text(&sv.visit_date)
+            || !is_clean_text(&sv.qp_role)
+            || !is_clean_text(&sv.scope_observed)
+        {
             return Err(QaqcError::invalid(
                 "verification_index.site_visits",
-                "site visit requires non-empty visit_date and qp_role",
+                "site visit requires clean non-empty visit_date, qp_role, and scope_observed",
             ));
         }
         check_refs(&sv.original_refs, &originals, "site_visits")?;
     }
     for cs in &req.check_sampling {
-        if cs.campaign_id.trim().is_empty()
+        if !is_clean_text(&cs.campaign_id)
+            || !is_clean_text(&cs.analyte)
+            || !is_clean_text(&cs.method)
             || cs.sample_count == 0
             || !cs.mean_relative_diff_pct.is_finite()
         {
             return Err(QaqcError::invalid(
                 "verification_index.check_sampling",
-                "check sampling requires non-empty campaign_id, sample_count >= 1, and finite diff",
+                "check sampling requires clean non-empty campaign_id/analyte/method, sample_count >= 1, and finite diff",
             ));
         }
         check_refs(&cs.original_refs, &originals, "check_sampling")?;
     }
+    let mut seen_findings = BTreeSet::new();
     for f in &req.audit_findings {
-        if f.finding_id.trim().is_empty() || f.summary.trim().is_empty() {
+        if !is_clean_text(&f.finding_id)
+            || !is_clean_text(&f.summary)
+            || f.resolution_note
+                .as_deref()
+                .is_some_and(|n| n.chars().any(char::is_control))
+        {
             return Err(QaqcError::invalid(
                 "verification_index.audit_findings",
-                "finding requires non-empty finding_id and summary",
+                "finding requires clean non-empty finding_id and summary without control chars",
+            ));
+        }
+        if !seen_findings.insert(f.finding_id.clone()) {
+            return Err(QaqcError::invalid(
+                "verification_index.audit_findings",
+                format!("duplicate audit finding_id '{}'", f.finding_id),
             ));
         }
         if let Some(sr) = &f.source_ref
@@ -811,8 +1003,22 @@ pub fn build_data_verification_index(
     let mut uncertified_batches_all = 0usize;
 
     for camp in &req.qaqc_campaigns {
-        total_batches_all += camp.total_batches;
-        uncertified_batches_all += camp.batches_without_signed_certificate;
+        total_batches_all = total_batches_all
+            .checked_add(camp.total_batches)
+            .ok_or_else(|| {
+                QaqcError::invalid(
+                    "verification_index.qaqc_campaigns",
+                    "total_batches sum overflowed usize",
+                )
+            })?;
+        uncertified_batches_all = uncertified_batches_all
+            .checked_add(camp.batches_without_signed_certificate)
+            .ok_or_else(|| {
+                QaqcError::invalid(
+                    "verification_index.qaqc_campaigns",
+                    "batches_without_signed_certificate sum overflowed usize",
+                )
+            })?;
 
         if camp.disclosure_depth == DisclosureDepth::RulesOnly {
             synthesized_gaps.push(AuditFinding {
@@ -1290,12 +1496,20 @@ pub fn build_data_verification_index(
         "DRAFT STANDARD — NOT IN FORCE (G-HALL-2): rendered against proposed NI 43-101 replacement requirements",
     );
 
-    // Deterministic BLAKE3 digest over the rendered canonical index skeleton.
+    // Deterministic BLAKE3 digest over the rendered canonical index skeleton and all CAS originals.
     let mut enc = Encoder::new_frame(*b"DVI1", 1);
     enc.put_str(&req.property_name);
     enc.put_str(&req.effective_date);
     enc.put_str(req.standard.code());
     enc.put_str(&req.evidence_cut_id);
+    enc.put_u64(unresolved_gap_count as u64);
+    enc.put_u32(originals.len() as u32);
+    for orig in originals.values() {
+        enc.put_str(&orig.ref_id);
+        enc.put_str(orig.kind.code());
+        enc.put_str(&orig.locator);
+        enc.put_str(&orig.sha256_hex);
+    }
     enc.put_u32(item_sections.len() as u32);
     for sec in &item_sections {
         enc.put_str(&sec.item_code);
@@ -1379,9 +1593,9 @@ pub fn render_verification_index_markdown(index: &DataVerificationIndex) -> Stri
                     let _ = writeln!(
                         md,
                         "| `{}` | `{}` | `{}` | `{}` |",
-                        orig.ref_id,
+                        escape_md_cell(&orig.ref_id),
                         orig.kind.code(),
-                        orig.locator,
+                        escape_md_cell(&orig.locator),
                         orig.sha256_hex
                     );
                 }

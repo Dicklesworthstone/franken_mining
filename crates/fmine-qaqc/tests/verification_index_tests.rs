@@ -376,7 +376,7 @@ fn test_bd174_data_verification_index_wires_live_qaqc_and_renders_all_standards(
     );
 
     // Dangling CAS original ref refuses with FMINE-REF-208.
-    let mut bad_ref = req;
+    let mut bad_ref = req.clone();
     bad_ref.database_audits[0]
         .original_refs
         .push("MISSING-REF".to_string());
@@ -385,4 +385,31 @@ fn test_bd174_data_verification_index_wires_live_qaqc_and_renders_all_standards(
         err.to_refusal().code,
         RefusalCode::SourceCellUnusable208.as_str()
     );
+
+    // Duplicate campaign_id, audit_id, or finding_id must refuse.
+    let mut dup_camp = req.clone();
+    dup_camp.qaqc_campaigns[1].campaign_id = dup_camp.qaqc_campaigns[0].campaign_id.clone();
+    assert!(build_data_verification_index(&dup_camp).is_err());
+
+    let mut dup_find = req.clone();
+    let f0 = dup_find.audit_findings[0].clone();
+    dup_find.audit_findings.push(f0);
+    assert!(build_data_verification_index(&dup_find).is_err());
+
+    // Non-finite embedded QA/QC summary value (NaN in CRM bias or duplicate CV) must refuse.
+    let mut nan_crm = req.clone();
+    nan_crm.qaqc_campaigns[0].crm_summaries[0].bias.bias = f64::NAN;
+    assert!(build_data_verification_index(&nan_crm).is_err());
+
+    let mut nan_dup = req.clone();
+    nan_dup.qaqc_campaigns[0].duplicate_summaries[0].cv_avr_pct = f64::NAN;
+    assert!(build_data_verification_index(&nan_dup).is_err());
+
+    // Markdown table cells escape pipe/backtick characters and unlinked originals affect digest.
+    let mut md_escape = req;
+    md_escape.signed_originals[0].locator = "cas/cert|a`b.pdf".to_string();
+    let escaped_idx = build_data_verification_index(&md_escape).expect("escaped locator valid");
+    assert_ne!(escaped_idx.digest_hex, idx_a.digest_hex);
+    let escaped_md = render_verification_index_markdown(&escaped_idx);
+    assert!(escaped_md.contains("cas/cert\\|a'b.pdf"));
 }
